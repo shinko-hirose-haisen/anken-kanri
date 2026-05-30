@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>案件管理</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif; background: #f1f5f9; }
+    select, input, textarea { font-family: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+
+
+// ─── Supabase設定 ─────────────────────────────────────────────
+const SUPABASE_URL = "https://nktwovvkirfgclvcietq.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5rdHdvdnZraXJmZ2NsdmNpZXRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxMjM4OTYsImV4cCI6MjA5NTY5OTg5Nn0.MtuDR6ktLbERQrLa9chwsyrNkG2x7ogU_H7hNobFtaw";
+
+async function sbLoad() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients`, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!res.ok) throw new Error(`load error ${res.status}`);
+  const rows = await res.json();
+  return rows[0] || { cases: [], clients: [] };
+}
+
+async function sbSave(cases, clients) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main`, {
+    method: "PATCH",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal"
+    },
+    body: JSON.stringify({ cases, clients, updated_at: new Date().toISOString() })
+  });
+  if (!res.ok) throw new Error(`save error ${res.status}`);
+}
+
+// ─── Constants ───────────────────────────────────────────────
+const STATUS_LIST = [
+  { key: "inquiry",    label: "打診受付", color: "#64748b", bg: "#f1f5f9" },
+  { key: "estimating", label: "見積中",   color: "#b45309", bg: "#fef3c7" },
+  { key: "waiting",    label: "回答待ち", color: "#1d4ed8", bg: "#dbeafe" },
+  { key: "ordered",    label: "受注",     color: "#15803d", bg: "#dcfce7" },
+  { key: "inprogress", label: "進行中",   color: "#7c3aed", bg: "#ede9fe" },
+  { key: "completed",  label: "完了",     color: "#374151", bg: "#e5e7eb" },
+  { key: "lost",       label: "失注",     color: "#dc2626", bg: "#fee2e2" },
+];
+const SHIP_TYPES = ["自社船", "借り船（傭船）"];
+const SAVE_DEBOUNCE_MS = 2000;
+
+// ─── Tiny helpers ─────────────────────────────────────────────
+const nowStr  = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+const dateStr = () => new Date().toISOString().slice(0, 10);
+const fmtYen  = (v) => v ? `¥${Number(v).toLocaleString()}` : "—";
+
+const emptyCase = () => ({
+  id: Date.now(),
+  clientId: "", contactId: "", client: "", contactName: "", title: "", status: "inquiry",
+  inquiryDate: dateStr(),
+  shipType: "自社船", shipName: "",
+  estimateAmount: "",
+  subEstimates: [],
+  workUndecided: false,
+  workYear: "", workMonth: "", workJun: "",
+  notes: "",
+  history: [{ date: nowStr(), text: "案件登録" }],
+});
+
+const emptySubEstimate = () => ({ id: Date.now(), vendor: "", amount: "" });
+
+const JUN_LABELS = ["", "上旬", "中旬", "下旬"];
+function fmtWorkTime(c) {
+  if (c.workUndecided) return "時期未定";
+  if (!c.workYear && !c.workMonth) return null;
+  let s = c.workYear ? `${c.workYear}年` : "";
+  if (c.workMonth) s += `${c.workMonth}月`;
+  if (c.workJun) s += JUN_LABELS[c.workJun]||"";
+  return s || null;
+}
+
+// 案件の表示用依頼元名を返す
+function clientDisplayName(c, clients) {
+  const cid = String(c.clientId||"");
+  if (cid && cid !== "__manual__") {
+    const cl = clients.find(x => String(x.id) === cid);
+    if (cl) return cl.name;
+  }
+  return c.client || "";
+}
+// ─── Styles ───────────────────────────────────────────────────
+const S = {
+  label: { display: "block", fontSize: 11, color: "#64748b", marginBottom: 3, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" },
+  input: { width: "100%", padding: "9px 11px", borderRadius: 8, border: "1.5px solid #e2e8f0", fontSize: 14, color: "#1e293b", background: "#f8fafc", boxSizing: "border-box", outline: "none" },
+  btn: (bg, color="#fff") => ({ background: bg, color, border: "none", borderRadius: 8, padding: "10px 18px", fontWeight: 700, cursor: "pointer", fontSize: 14 }),
+};
+
+// ─── Sub-components ───────────────────────────────────────────
+function Field({ label, value, onChange, type="text", placeholder, rows }) {
+  const el = rows
+    ? <textarea value={value} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{...S.input, resize:"vertical"}} />
+    : <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={S.input} />;
+  return <div style={{marginBottom:14}}><label style={S.label}>{label}</label>{el}</div>;
+}
+
+function StatusBadge({ statusKey, small }) {
+  const s = STATUS_LIST.find(s=>s.key===statusKey) || STATUS_LIST[0];
+  return (
+    <span style={{ background:s.bg, color:s.color, border:`1px solid ${s.color}44`,
+      borderRadius:20, padding: small?"1px 8px":"3px 11px", fontSize: small?11:12, fontWeight:700, whiteSpace:"nowrap" }}>
+      {s.label}
+    </span>
+  );
+}
+
+function TopBar({ title, onBack, right }) {
+  return (
+    <div style={{ background:"#0f2744", color:"#fff", padding:"13px 16px",
+      display:"flex", alignItems:"center", gap:10, position:"sticky", top:0, zIndex:10 }}>
+      {onBack && <button onClick={onBack} style={{background:"none",border:"none",color:"#fff",fontSize:22,cursor:"pointer",lineHeight:1}}>←</button>}
+      <span style={{flex:1, fontWeight:800, fontSize:16, letterSpacing:0.5}}>{title}</span>
+      {right}
+    </div>
+  );
+}
+
+function SaveIndicator({ state }) {
+  const map = { idle:"", saving:"保存中…", saved:"✓ 保存済み", error:"保存失敗" };
+  const col  = { idle:"transparent", saving:"#94a3b8", saved:"#22c55e", error:"#ef4444" };
+  return state==="idle" ? null : (
+    <div style={{ textAlign:"center", fontSize:11, color:col[state], padding:"4px 0", background:"#f0fdf4" }}>
+      {map[state]}
+    </div>
+  );
+}
+
+// ─── Case Card ────────────────────────────────────────────────
+function CaseCard({ c, onClick, clients }) {
+  const color = STATUS_LIST.find(s=>s.key===c.status)?.color || "#ccc";
+  const needsAlert = c.shipType==="借り船（傭船）" && !["completed","lost"].includes(c.status) && !(c.subEstimates||[]).length;
+  return (
+    <div onClick={onClick} style={{ background:"#fff", borderRadius:12, padding:"13px 15px",
+      marginBottom:9, boxShadow:"0 1px 4px #0001", cursor:"pointer",
+      borderLeft:`4px solid ${color}` }}>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4}}>
+        <span style={{fontWeight:700, fontSize:15, color:"#1e293b", flex:1, marginRight:8}}>{clientDisplayName(c,clients)||"（依頼元未入力）"}{c.contactName && <span style={{fontWeight:400, fontSize:13, color:"#64748b"}}>　{c.contactName}</span>}</span>
+        <StatusBadge statusKey={c.status} small />
+      </div>
+      <div style={{color:"#475569", fontSize:13, marginBottom:6}}>{c.title||"（件名未入力）"}</div>
+      <div style={{display:"flex", gap:10, fontSize:12, color:"#94a3b8", flexWrap:"wrap"}}>
+        <span>📅 {c.inquiryDate}</span>
+        <span>🚢 {c.shipType}{c.shipName?`／${c.shipName}`:""}</span>
+        {c.estimateAmount && <span>💴 {fmtYen(c.estimateAmount)}</span>}
+        {needsAlert && <span style={{color:"#f59e0b", fontWeight:700}}>⚠️ 下見積未入力</span>}
+      </div>
+      {fmtWorkTime(c) && <div style={{marginTop:5, fontSize:12, color:"#7c3aed", fontWeight:600}}>🗓 作業：{fmtWorkTime(c)}</div>}
+    </div>
+  );
+}
+
+// ─── Client Selector (案件内で会社→担当者を選ぶ) ────────────
+// IDはすべて文字列として扱う（selectのvalueは必ず文字列のため）
+function ClientSelector({ c, clients, onChange }) {
+  const cid = String(c.clientId||"");
+  const selectedClient = clients.find(cl => String(cl.id) === cid);
+  const contacts = selectedClient ? (selectedClient.contacts || []) : [];
+  const ctid = String(c.contactId||"");
+
+  function pickClient(sid) {
+    const cl = clients.find(x => String(x.id) === sid);
+    onChange({...c, clientId: sid, client: cl ? cl.name : "", contactId: "", contactName: ""});
+  }
+  function pickContact(sid) {
+    const ct = contacts.find(x => String(x.id) === sid);
+    onChange({...c, contactId: sid, contactName: ct ? ct.name : ""});
+  }
+
+  return (
+    <div style={{marginBottom:14}}>
+      <label style={S.label}>依頼元（会社）</label>
+      <select value={cid} onChange={e=>pickClient(e.target.value)} style={{...S.input, marginBottom:8}}>
+        <option value="">-- 選択してください --</option>
+        {clients.map(cl=><option key={cl.id} value={String(cl.id)}>{cl.name}</option>)}
+        <option value="__manual__">手入力する</option>
+      </select>
+      {cid==="__manual__" && (
+        <input value={c.client||""} onChange={e=>onChange({...c, client:e.target.value})}
+          placeholder="会社名を入力" style={{...S.input, marginBottom:8}} />
+      )}
+      {cid && cid!=="__manual__" && contacts.length>0 && (
+        <>
+          <label style={S.label}>担当者</label>
+          <select value={ctid} onChange={e=>pickContact(e.target.value)} style={{...S.input, marginBottom:8}}>
+            <option value="">-- 担当者を選択 --</option>
+            {contacts.map(ct=><option key={ct.id} value={String(ct.id)}>{ct.name}{ct.tel?`　${ct.tel}`:""}</option>)}
+          </select>
+        </>
+      )}
+      {cid && cid!=="__manual__" && contacts.length===0 && (
+        <div style={{fontSize:12, color:"#94a3b8", marginBottom:4}}>※ 顧客管理で担当者を登録できます</div>
+      )}
+    </div>
+  );
+}
+
+// ─── Delete Confirm (window.confirm の代替) ──────────────────
+function DeleteConfirm({ onDelete }) {
+  const [open, setOpen] = useState(false);
+  if (!open) return (
+    <div style={{padding:"16px 16px 0"}}>
+      <button onClick={()=>setOpen(true)}
+        style={{...S.btn("#fee2e2","#dc2626"), width:"100%", border:"1px solid #fca5a5"}}>
+        🗑️ この案件を削除
+      </button>
+    </div>
+  );
+  return (
+    <div style={{margin:"16px 16px 0", background:"#fee2e2", borderRadius:12, padding:16, border:"1px solid #fca5a5"}}>
+      <div style={{fontWeight:700, color:"#dc2626", marginBottom:12, fontSize:15}}>本当に削除しますか？</div>
+      <div style={{display:"flex", gap:8}}>
+        <button onClick={()=>setOpen(false)}
+          style={{...S.btn("#f1f5f9","#475569"), flex:1}}>キャンセル</button>
+        <button onClick={onDelete}
+          style={{...S.btn("#dc2626"), flex:1}}>削除する</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Case Detail ──────────────────────────────────────────────
+function CaseDetail({ c, onChange, onBack, onDelete, clients }) {
+  const [tab, setTab]   = useState("basic");
+  const [memo, setMemo] = useState("");
+
+  function field(key, value) {
+    const updated = {...c, [key]: value};
+    if (key==="status") {
+      const label = STATUS_LIST.find(s=>s.key===value)?.label || value;
+      updated.history = [...(c.history||[]), { date:nowStr(), text:`ステータス → ${label}` }];
+    }
+    onChange(updated);
+  }
+
+  function addMemo() {
+    if (!memo.trim()) return;
+    onChange({...c, history:[...(c.history||[]), {date:nowStr(), text:memo.trim()}]});
+    setMemo("");
+  }
+
+  const tabBtn = (t, label) => (
+    <button onClick={()=>setTab(t)} style={{
+      padding:"8px 14px", border:"none", borderRadius:"8px 8px 0 0", fontSize:13, cursor:"pointer",
+      fontWeight: tab===t ? 700 : 400,
+      background: tab===t ? "#fff" : "#e8edf3",
+      color: tab===t ? "#0f2744" : "#64748b",
+    }}>{label}</button>
+  );
+
+  const isBorrowed = c.shipType==="借り船（傭船）";
+
+  return (
+    <div style={{minHeight:"100vh", background:"#f1f5f9", paddingBottom:48}}>
+      <TopBar
+        title={clientDisplayName(c,clients)||"依頼元未入力"}
+        onBack={onBack}
+        right={<StatusBadge statusKey={c.status} />}
+      />
+
+      <div style={{display:"flex", padding:"10px 16px 0", gap:3}}>
+        {tabBtn("basic","基本情報")}
+        {tabBtn("estimate","見積もり")}
+        {tabBtn("history","進捗履歴")}
+      </div>
+
+      <div style={{background:"#fff", padding:16, boxShadow:"0 1px 3px #0001"}}>
+        {tab==="basic" && <>
+          {/* 依頼元選択 */}
+          <ClientSelector c={c} clients={clients} onChange={onChange} />
+          <Field label="件名" value={c.title} onChange={v=>field("title",v)} placeholder="例：富山港向け台船回航" />
+          <Field label="打診日" type="date" value={c.inquiryDate} onChange={v=>field("inquiryDate",v)} />
+          <div style={{marginBottom:14}}>
+            <label style={S.label}>ステータス</label>
+            <select value={c.status} onChange={e=>field("status",e.target.value)} style={S.input}>
+              {STATUS_LIST.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
+            </select>
+          </div>
+          <div style={{marginBottom:14}}>
+            <label style={S.label}>船種別</label>
+            <select value={c.shipType} onChange={e=>field("shipType",e.target.value)} style={S.input}>
+              {SHIP_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <Field label="船名" value={c.shipName} onChange={v=>field("shipName",v)} placeholder="例：第三〇〇丸" />
+          {/* 作業予定時期 */}
+          <div style={{marginBottom:14}}>
+            <label style={S.label}>作業予定時期</label>
+            <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:8}}>
+              <input type="checkbox" id="undecided" checked={!!c.workUndecided}
+                onChange={e=>field("workUndecided", e.target.checked)}
+                style={{width:16, height:16, cursor:"pointer"}} />
+              <label htmlFor="undecided" style={{fontSize:14, color:"#475569", cursor:"pointer"}}>時期未定</label>
+            </div>
+            {!c.workUndecided && (
+              <div style={{display:"flex", gap:6}}>
+                <select value={c.workYear||""} onChange={e=>field("workYear",e.target.value)}
+                  style={{...S.input, flex:2}}>
+                  <option value="">年</option>
+                  {Array.from({length:5},(_,i)=>new Date().getFullYear()+i).map(y=>(
+                    <option key={y} value={y}>{y}年</option>
+                  ))}
+                </select>
+                <select value={c.workMonth||""} onChange={e=>field("workMonth",e.target.value)}
+                  style={{...S.input, flex:2}}>
+                  <option value="">月</option>
+                  {Array.from({length:12},(_,i)=>i+1).map(m=>(
+                    <option key={m} value={m}>{m}月</option>
+                  ))}
+                </select>
+                <select value={c.workJun||""} onChange={e=>field("workJun",e.target.value)}
+                  style={{...S.input, flex:3}}>
+                  <option value="">旬</option>
+                  <option value="1">上旬</option>
+                  <option value="2">中旬</option>
+                  <option value="3">下旬</option>
+                </select>
+              </div>
+            )}
+          </div>
+        </>}
+
+        {tab==="estimate" && <>
+          <Field label="見積もり額（円）" type="number" value={c.estimateAmount} onChange={v=>field("estimateAmount",v)} placeholder="例：1500000" />
+          {isBorrowed && <>
+            <div style={{background:"#fef9ec", borderLeft:"3px solid #f59e0b", borderRadius:8, padding:"9px 12px", marginBottom:14, fontSize:12, color:"#92400e"}}>
+              ⚠️ 借り船案件：下見積もり先・金額を必ず記録してください
+            </div>
+            {/* 複数下見積もり */}
+            {(c.subEstimates||[]).map((se, idx) => (
+              <div key={se.id} style={{background:"#f8fafc", borderRadius:10, padding:"12px 12px 8px", marginBottom:10, border:"1px solid #e2e8f0"}}>
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8}}>
+                  <span style={{fontSize:12, fontWeight:700, color:"#64748b"}}>下見積もり先 {idx+1}</span>
+                  <button onClick={()=>{ const arr=(c.subEstimates||[]).filter(s=>s.id!==se.id); onChange({...c, subEstimates:arr}); }}
+                    style={{background:"none", border:"none", color:"#dc2626", fontSize:12, cursor:"pointer"}}>削除</button>
+                </div>
+                <Field label="会社名" value={se.vendor}
+                  onChange={v=>{ const arr=(c.subEstimates||[]).map(s=>s.id===se.id?{...s,vendor:v}:s); onChange({...c,subEstimates:arr}); }}
+                  placeholder="例：〇〇海運" />
+                <Field label="下見積もり額（円）" type="number" value={se.amount}
+                  onChange={v=>{ const arr=(c.subEstimates||[]).map(s=>s.id===se.id?{...s,amount:v}:s); onChange({...c,subEstimates:arr}); }}
+                  placeholder="例：1200000" />
+                {c.estimateAmount && se.amount && (
+                  <div style={{fontSize:12, color:"#15803d", fontWeight:700, marginBottom:4}}>
+                    粗利：{fmtYen(Number(c.estimateAmount)-Number(se.amount))}
+                  </div>
+                )}
+              </div>
+            ))}
+            <button onClick={()=>onChange({...c, subEstimates:[...(c.subEstimates||[]), emptySubEstimate()]})}
+              style={{...S.btn("#e8edf3","#0f2744"), width:"100%", marginBottom:14, fontSize:13}}>
+              ＋ 下見積もり先を追加
+            </button>
+          </>}
+          <Field label="備考・特記事項" value={c.notes} onChange={v=>field("notes",v)} rows={4} placeholder="積み地、揚げ地、荷物の種類、スケジュールなど" />
+        </>}
+
+        {tab==="history" && <>
+          <div style={{display:"flex", gap:8, marginBottom:16}}>
+            <input value={memo} onChange={e=>setMemo(e.target.value)} placeholder="進捗メモを入力…"
+              style={{...S.input, flex:1}} onKeyDown={e=>e.key==="Enter"&&addMemo()} />
+            <button onClick={addMemo} style={S.btn("#0f2744")}>追加</button>
+          </div>
+          <div style={{display:"flex", flexDirection:"column", gap:10}}>
+            {[...(c.history||[])].reverse().map((h,i)=>(
+              <div key={i} style={{borderLeft:"3px solid #cbd5e1", paddingLeft:12}}>
+                <div style={{fontSize:11, color:"#94a3b8"}}>{h.date}</div>
+                <div style={{fontSize:14, color:"#334155", marginTop:1}}>{h.text}</div>
+              </div>
+            ))}
+          </div>
+        </>}
+      </div>
+
+      <DeleteConfirm onDelete={()=>onDelete(c.id)} />
+    </div>
+  );
+}
+
+// ─── Data Export / Import ────────────────────────────────────
+function DataIO({ cases, clients, onImport, onClose }) {
+  const [importText, setImportText] = useState("");
+  const [msg, setMsg] = useState("");
+
+  function doExport() {
+    const data = JSON.stringify({ cases, clients }, null, 2);
+    // クリップボードにコピー
+    navigator.clipboard.writeText(data).then(()=>{
+      setMsg("✓ クリップボードにコピーしました");
+    }).catch(()=>{
+      setMsg("コピー失敗。下のテキストを手動でコピーしてください");
+    });
+  }
+
+  function doImport() {
+    try {
+      const parsed = JSON.parse(importText);
+      if (!parsed.cases || !parsed.clients) throw new Error("形式が違います");
+      if (true) { // 確認は別途UIで行う
+        onImport(parsed.cases, parsed.clients);
+        setMsg("✓ 取り込み完了！");
+        setImportText("");
+      }
+    } catch(e) {
+      setMsg("エラー：正しいデータではありません");
+    }
+  }
+
+  const exportData = JSON.stringify({ cases, clients }, null, 2);
+
+  return (
+    <div style={{minHeight:"100vh", background:"#f1f5f9", paddingBottom:40}}>
+      <TopBar title="データ引き継ぎ" onBack={onClose} />
+      <div style={{padding:16}}>
+
+        {/* エクスポート */}
+        <div style={{background:"#fff", borderRadius:12, padding:16, marginBottom:14, boxShadow:"0 1px 3px #0001"}}>
+          <div style={{fontWeight:700, color:"#0f2744", marginBottom:8}}>📤 データを書き出す（旧バージョンで使用）</div>
+          <div style={{fontSize:13, color:"#64748b", marginBottom:12}}>下のボタンを押してデータをコピーしてください</div>
+          <button onClick={doExport} style={{...S.btn("#0f2744"), width:"100%", marginBottom:10}}>
+            クリップボードにコピー
+          </button>
+          <textarea readOnly value={exportData} rows={6}
+            style={{...S.input, fontSize:11, fontFamily:"monospace", resize:"vertical"}}
+            onClick={e=>e.target.select()} />
+        </div>
+
+        {/* インポート */}
+        <div style={{background:"#fff", borderRadius:12, padding:16, marginBottom:14, boxShadow:"0 1px 3px #0001"}}>
+          <div style={{fontWeight:700, color:"#0f2744", marginBottom:8}}>📥 データを取り込む（新バージョンで使用）</div>
+          <div style={{fontSize:13, color:"#64748b", marginBottom:12}}>旧バージョンからコピーしたデータを貼り付けてください</div>
+          <textarea value={importText} onChange={e=>setImportText(e.target.value)}
+            rows={6} placeholder='{"cases":[...],"clients":[...]} の形式で貼り付け'
+            style={{...S.input, fontSize:11, fontFamily:"monospace", resize:"vertical", marginBottom:10}} />
+          <button onClick={doImport} style={{...S.btn("#15803d"), width:"100%"}}
+            disabled={!importText.trim()}>
+            取り込む
+          </button>
+        </div>
+
+        {msg && (
+          <div style={{background: msg.startsWith("✓")?"#f0fdf4":"#fee2e2",
+            borderRadius:8, padding:"10px 14px", fontSize:13,
+            color: msg.startsWith("✓")?"#15803d":"#dc2626", fontWeight:600}}>
+            {msg}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Client Manager ───────────────────────────────────────────
+const emptyContact = () => ({ id: Date.now(), name: "", tel: "", email: "", memo: "" });
+
+function ContactRow({ ct, onUpdate, onDelete }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:"#f8fafc", borderRadius:10, marginBottom:8, border:"1px solid #e2e8f0", overflow:"hidden"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{padding:"10px 12px", display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer"}}>
+        <div>
+          <span style={{fontWeight:600, fontSize:14, color:"#1e293b"}}>{ct.name||"（担当者名未入力）"}</span>
+          {ct.tel && <span style={{fontSize:12, color:"#64748b", marginLeft:10}}>{ct.tel}</span>}
+        </div>
+        <span style={{color:"#94a3b8", fontSize:14}}>{open?"▲":"▼"}</span>
+      </div>
+      {open && (
+        <div style={{borderTop:"1px solid #e2e8f0", padding:"12px 12px 8px"}}>
+          <Field label="担当者名" value={ct.name} onChange={v=>onUpdate({...ct,name:v})} placeholder="例：鈴木 一郎" />
+          <Field label="電話番号" value={ct.tel||""} onChange={v=>onUpdate({...ct,tel:v})} placeholder="例：090-1234-5678" />
+          <Field label="メールアドレス" value={ct.email||""} onChange={v=>onUpdate({...ct,email:v})} placeholder="例：suzuki@example.co.jp" />
+          <Field label="メモ" value={ct.memo||""} onChange={v=>onUpdate({...ct,memo:v})} rows={2} placeholder="役職・備考など" />
+          <button onClick={onDelete} style={{fontSize:12, color:"#dc2626", background:"none", border:"none", cursor:"pointer", padding:0}}>
+            🗑️ この担当者を削除
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClientCard({ cl, onUpdate, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const contacts = cl.contacts || [];
+  function addContact() {
+    onUpdate({...cl, contacts:[...contacts, emptyContact()]});
+  }
+  function updateContact(updated) {
+    onUpdate({...cl, contacts: contacts.map(ct=>ct.id===updated.id?updated:ct)});
+  }
+  function deleteContact(id) {
+    onUpdate({...cl, contacts: contacts.filter(ct=>ct.id!==id)});
+  }
+  return (
+    <div style={{background:"#fff", borderRadius:12, marginBottom:10, boxShadow:"0 1px 3px #0001", overflow:"hidden"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{padding:"13px 15px", display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer"}}>
+        <div>
+          <div style={{fontWeight:700, color:"#1e293b"}}>{cl.name||"（名称未入力）"}</div>
+          <div style={{fontSize:12, color:"#94a3b8", marginTop:2}}>
+            担当者 {contacts.length}名
+            {contacts.length>0 && "　" + contacts.map(ct=>ct.name||"?").join("・")}
+          </div>
+        </div>
+        <span style={{color:"#94a3b8", fontSize:18}}>{open?"▲":"▼"}</span>
+      </div>
+      {open && (
+        <div style={{borderTop:"1px solid #f1f5f9", padding:"14px 15px"}}>
+          <Field label="依頼元名（会社名）" value={cl.name} onChange={v=>onUpdate({...cl,name:v})} placeholder="例：〇〇株式会社" />
+          <Field label="会社メモ" value={cl.memo||""} onChange={v=>onUpdate({...cl,memo:v})} rows={2} placeholder="所在地・業種など" />
+          <div style={{marginBottom:10}}>
+            <label style={S.label}>担当者一覧</label>
+            {contacts.length===0 && (
+              <div style={{fontSize:13, color:"#94a3b8", marginBottom:8}}>担当者が登録されていません</div>
+            )}
+            {contacts.map(ct=>(
+              <ContactRow key={ct.id} ct={ct} onUpdate={updateContact} onDelete={()=>deleteContact(ct.id)} />
+            ))}
+            <button onClick={addContact} style={{...S.btn("#e8edf3","#0f2744"), width:"100%", fontSize:13, marginTop:4}}>
+              ＋ 担当者を追加
+            </button>
+          </div>
+          <button onClick={onDelete} style={{fontSize:12, color:"#dc2626", background:"none", border:"none", cursor:"pointer", padding:0}}>
+            🗑️ この依頼元を削除
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClientManager({ clients, onClose, onUpdate }) {
+  const [name, setName] = useState("");
+  function add() {
+    if (!name.trim()) return;
+    onUpdate([...clients, {id:Date.now(), name:name.trim(), memo:"", contacts:[]}]);
+    setName("");
+  }
+  return (
+    <div style={{minHeight:"100vh", background:"#f1f5f9", paddingBottom:40}}>
+      <TopBar title="顧客・依頼元管理" onBack={onClose} />
+      <div style={{padding:16}}>
+        <div style={{background:"#fff", borderRadius:12, padding:16, marginBottom:14, boxShadow:"0 1px 3px #0001"}}>
+          <div style={{fontWeight:700, marginBottom:12, color:"#0f2744"}}>新規登録</div>
+          <Field label="依頼元名（会社名）" value={name} onChange={setName} placeholder="例：〇〇株式会社" />
+          <button onClick={add} style={{...S.btn("#0f2744"), width:"100%"}}>追加</button>
+        </div>
+        {clients.map(cl=>(
+          <ClientCard key={cl.id} cl={cl}
+            onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))}
+            onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────
+function App() {
+  const [cases,   setCases]   = useState([]);
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [view, setView]         = useState("list");   // list | detail | clients | dataio
+  const [selectedId, setSelectedId] = useState(null);
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [sortOrder,    setSortOrder]    = useState("none"); // none | asc | desc
+  const [filterYear,   setFilterYear]   = useState("");
+  const [filterMonth,  setFilterMonth]  = useState("");
+  const [search, setSearch] = useState("");
+
+  // ── Load on mount (Supabase) ──
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await sbLoad();
+        if (data.cases)   setCases(data.cases);
+        if (data.clients) setClients(data.clients);
+      } catch(e) {
+        console.error("load error:", e);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  // ── Auto-save (Supabase) ──
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    if (loading) return;
+    setSaveState("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await sbSave(cases, clients);
+        setSaveState("saved");
+        setTimeout(()=>setSaveState("idle"), 2500);
+      } catch(e) {
+        console.error(e);
+        setSaveState("error");
+      }
+    }, SAVE_DEBOUNCE_MS);
+  }, [cases, clients]);
+
+  // ── Derived ──
+  const selected = cases.find(c=>c.id===selectedId);
+  const alertCases = cases.filter(c =>
+    c.shipType==="借り船（傭船）" && !["completed","lost"].includes(c.status) && !(c.subEstimates||[]).length
+  );
+  const filtered = cases.filter(c => {
+    if (filterStatus!=="all" && c.status!==filterStatus) return false;
+    if (filterYear  && String(c.workYear)  !== filterYear)  return false;
+    if (filterMonth && String(c.workMonth) !== filterMonth) return false;
+    if (search && !c.client.includes(search) && !c.title.includes(search)) return false;
+    return true;
+  });
+  // 作業時期を数値化してソート
+  function workTimeVal(c) {
+    if (c.workUndecided) return 99999999;
+    const y = Number(c.workYear)||9999;
+    const m = Number(c.workMonth)||99;
+    const j = Number(c.workJun)||9;
+    return y*10000 + m*100 + j;
+  }
+  const sorted = sortOrder === "none" ? filtered : [...filtered].sort((a,b)=>{
+    const diff = workTimeVal(a) - workTimeVal(b);
+    return sortOrder === "asc" ? diff : -diff;
+  });
+  const activeCount = cases.filter(c=>!["completed","lost"].includes(c.status)).length;
+
+  function updateCase(updated) { setCases(prev=>prev.map(c=>c.id===updated.id?updated:c)); }
+  function deleteCase(id)      { setCases(prev=>prev.filter(c=>c.id!==id)); setView("list"); }
+  function addCase()           { const nc=emptyCase(); setCases(prev=>[nc,...prev]); setSelectedId(nc.id); setView("detail"); }
+
+  if (loading) return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}>
+      <div style={{textAlign:"center", color:"#64748b"}}>
+        <div style={{fontSize:32,marginBottom:8}}>🚢</div>
+        <div>読み込み中…</div>
+      </div>
+    </div>
+  );
+
+  if (view==="dataio") return <DataIO cases={cases} clients={clients} onImport={(c,cl)=>{setCases(c);setClients(cl);}} onClose={()=>setView("list")} />;
+  if (view==="clients") return <ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} />;
+  if (view==="detail" && selected) return (
+    <CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} />
+  );
+
+  // ── List view ──
+  return (
+    <div style={{minHeight:"100vh", background:"#f1f5f9", fontFamily:"'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif"}}>
+      <TopBar
+        title="🚢 配船案件管理"
+        right={
+<div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setView("dataio")} style={{
+              background:"rgba(255,255,255,0.15)", color:"#fff", border:"1px solid rgba(255,255,255,0.3)",
+              borderRadius:8, padding:"5px 11px", fontSize:12, cursor:"pointer"
+            }}>引き継ぎ</button>
+            <button onClick={()=>setView("clients")} style={{
+              background:"rgba(255,255,255,0.15)", color:"#fff", border:"1px solid rgba(255,255,255,0.3)",
+              borderRadius:8, padding:"5px 11px", fontSize:12, cursor:"pointer"
+            }}>顧客管理</button>
+          </div>
+        }
+      />
+      <SaveIndicator state={saveState} />
+
+      {/* Stats strip */}
+      <div style={{display:"flex", gap:0, background:"#0f2744", padding:"0 16px 12px"}}>
+        {[
+          {label:"全案件", value:cases.length},
+          {label:"進行中", value:activeCount},
+          {label:"今月受注", value:cases.filter(c=>c.status==="ordered"&&c.inquiryDate?.startsWith(new Date().toISOString().slice(0,7))).length},
+        ].map((s,i)=>(
+          <div key={i} style={{flex:1, textAlign:"center", color:"#fff"}}>
+            <div style={{fontSize:22, fontWeight:800}}>{s.value}</div>
+            <div style={{fontSize:11, opacity:0.6}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Alert */}
+      {alertCases.length>0 && (
+        <div style={{background:"#fffbeb", borderLeft:"4px solid #f59e0b", margin:"12px 16px 0", borderRadius:8, padding:"10px 13px"}}>
+          <div style={{fontWeight:700, color:"#92400e", fontSize:13}}>⚠️ 下見積もり未入力 {alertCases.length}件</div>
+          {alertCases.map(c=>(
+            <div key={c.id} onClick={()=>{setSelectedId(c.id);setView("detail");}}
+              style={{fontSize:12, color:"#b45309", marginTop:3, cursor:"pointer"}}>
+              → {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Search */}
+      <div style={{padding:"12px 16px 0"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder="🔍 依頼元・件名で検索…" style={S.input} />
+      </div>
+
+      {/* 時期フィルター */}
+      <div style={{padding:"8px 16px 0", display:"flex", gap:6}}>
+        <select value={filterYear} onChange={e=>setFilterYear(e.target.value)}
+          style={{...S.input, flex:1, padding:"7px 8px", fontSize:13}}>
+          <option value="">年（すべて）</option>
+          {Array.from({length:5},(_,i)=>new Date().getFullYear()+i).map(y=>(
+            <option key={y} value={y}>{y}年</option>
+          ))}
+        </select>
+        <select value={filterMonth} onChange={e=>setFilterMonth(e.target.value)}
+          style={{...S.input, flex:1, padding:"7px 8px", fontSize:13}}>
+          <option value="">月（すべて）</option>
+          {Array.from({length:12},(_,i)=>i+1).map(m=>(
+            <option key={m} value={m}>{m}月</option>
+          ))}
+        </select>
+        {(filterYear||filterMonth) && (
+          <button onClick={()=>{setFilterYear("");setFilterMonth("");}}
+            style={{...S.btn("#fee2e2","#dc2626"), padding:"7px 12px", fontSize:12, whiteSpace:"nowrap"}}>
+            ✕ クリア
+          </button>
+        )}
+      </div>
+
+      {/* 並べ替え */}
+      <div style={{padding:"6px 16px 0", display:"flex", alignItems:"center", gap:6}}>
+        <span style={{fontSize:12, color:"#64748b", whiteSpace:"nowrap"}}>作業日順：</span>
+        {[["none","指定なし"],["asc","↑ 昇順"],["desc","↓ 降順"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setSortOrder(v)} style={{
+            borderRadius:20, padding:"4px 11px", fontSize:12, cursor:"pointer",
+            fontWeight: sortOrder===v ? 700 : 400,
+            background: sortOrder===v ? "#0f2744" : "#fff",
+            color: sortOrder===v ? "#fff" : "#475569",
+            border: `1px solid ${sortOrder===v?"#0f2744":"#cbd5e1"}`
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {/* Status filter */}
+      <div style={{padding:"10px 16px 0", display:"flex", gap:6, overflowX:"auto", paddingBottom:2}}>
+        {[{key:"all",label:"すべて",color:"#0f2744",bg:"#e8edf3"}, ...STATUS_LIST].map(s=>(
+          <button key={s.key} onClick={()=>setFilterStatus(s.key)} style={{
+            borderRadius:20, padding:"4px 12px", border:`1px solid ${filterStatus===s.key?s.color:"#cbd5e1"}`,
+            background: filterStatus===s.key ? s.color : "#fff",
+            color: filterStatus===s.key ? "#fff" : s.color,
+            fontSize:12, whiteSpace:"nowrap", cursor:"pointer", fontWeight: filterStatus===s.key?700:400
+          }}>{s.label}</button>
+        ))}
+      </div>
+
+      {/* Case list */}
+      <div style={{padding:"12px 16px"}}>
+        {filtered.length===0 && (
+          <div style={{textAlign:"center", color:"#94a3b8", padding:"50px 0"}}>
+            <div style={{fontSize:36, marginBottom:8}}>📋</div>
+            <div>{search||filterStatus!=="all"||filterYear||filterMonth ? "該当する案件がありません" : "案件を追加してください"}</div>
+          </div>
+        )}
+        {sorted.map(c=>(
+          <CaseCard key={c.id} c={c} onClick={()=>{setSelectedId(c.id);setView("detail");}} clients={clients} />
+        ))}
+      </div>
+
+      {/* FAB */}
+      <button onClick={addCase} style={{
+        position:"fixed", bottom:24, right:20, width:58, height:58, borderRadius:"50%",
+        background:"#0f2744", color:"#fff", fontSize:30, border:"none",
+        boxShadow:"0 4px 16px #0003", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+        lineHeight:1
+      }}>＋</button>
+    </div>
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
