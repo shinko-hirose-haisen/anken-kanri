@@ -530,6 +530,7 @@
         return (Number(c.workYear)||9999)*10000+(Number(c.workMonth)||99)*100+(Number(c.workJun)||9);
       }
       const filtered = cases.filter(c => {
+        if (filterStatus==="all" && c.status==="lost" && !showLost) return false;
         if (filterStatus!=="all"&&c.status!==filterStatus) return false;
         if (filterYear&&String(c.workYear)!==filterYear) return false;
         if (filterMonth&&String(c.workMonth)!==filterMonth) return false;
