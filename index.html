@@ -455,6 +455,7 @@
       const [view,       setView]       = useState("list");
       const [selectedId, setSelectedId] = useState(null);
       const [filterStatus, setFilterStatus] = useState("all");
+      const [showLost, setShowLost] = useState(false);
       const [sortOrder,    setSortOrder]    = useState("none");
       const [filterYear,   setFilterYear]   = useState("");
       const [filterMonth,  setFilterMonth]  = useState("");
@@ -596,9 +597,10 @@
             ))}
           </div>
           <div style={{padding:"10px 16px 0",display:"flex",gap:6,overflowX:"auto",paddingBottom:2}}>
-            {[{key:"all",label:"すべて",color:"#0f2744"},...STATUS_LIST].map(s=>(
+            {[{key:"all",label:"すべて",color:"#0f2744"},...STATUS_LIST.filter(s=>s.key!=="lost")].map(s=>(
               <button key={s.key} onClick={()=>setFilterStatus(s.key)} style={{borderRadius:20,padding:"4px 12px",border:`1px solid ${filterStatus===s.key?s.color:"#cbd5e1"}`,background:filterStatus===s.key?s.color:"#fff",color:filterStatus===s.key?"#fff":s.color,fontSize:12,whiteSpace:"nowrap",cursor:"pointer",fontWeight:filterStatus===s.key?700:400}}>{s.label}</button>
             ))}
+            <button onClick={()=>setShowLost(v=>!v)} style={{borderRadius:20,padding:"4px 12px",border:`1px solid ${showLost?"#dc2626":"#cbd5e1"}`,background:showLost?"#dc2626":"#fff",color:showLost?"#fff":"#dc2626",fontSize:12,whiteSpace:"nowrap",cursor:"pointer",fontWeight:showLost?700:400}}>失注</button>
           </div>
           <div style={{padding:"12px 16px"}}>
             {sorted.length===0 && <div style={{textAlign:"center",color:"#94a3b8",padding:"50px 0"}}><div style={{fontSize:36,marginBottom:8}}>📋</div><div>{search||filterStatus!=="all"||filterYear||filterMonth?"該当する案件がありません":"案件を追加してください"}</div></div>}
