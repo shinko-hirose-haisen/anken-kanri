@@ -44,24 +44,51 @@
     function clearToken() { try { sessionStorage.removeItem("anken_token"); } catch {} }
 
     // ─── OneDrive API ─────────────────────────────────────────
+    // 共有ファイルID（ヒロセさんのOneDrive上の固定ファイル）
+    const SHARED_FILE_ID = "01WEYQQKO74UMK6UWDRJEZ3CVMO6X5HHSG";
+
     async function odLoad(token) {
+      // まず共有ファイルIDで試みる
       const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+        `https://graph.microsoft.com/v1.0/me/drive/items/${SHARED_FILE_ID}/content`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (res.status === 404) return null;
+      if (res.status === 404 || res.status === 403) {
+        // アクセスできない場合は自分のOneDriveから読む
+        const res2 = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res2.status === 404) return null;
+        if (!res2.ok) throw new Error(`load ${res2.status}`);
+        return res2.json();
+      }
       if (!res.ok) throw new Error(`load ${res.status}`);
       return res.json();
     }
     async function odSave(token, cases, clients) {
+      // まず共有ファイルIDで試みる
       const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+        `https://graph.microsoft.com/v1.0/me/drive/items/${SHARED_FILE_ID}/content`,
         {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({ cases, clients }),
         }
       );
+      if (res.status === 403) {
+        // 書き込み権限がない場合は自分のOneDriveに保存
+        const res2 = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+          {
+            method: "PUT",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ cases, clients }),
+          }
+        );
+        if (!res2.ok) throw new Error(`save ${res2.status}`);
+        return;
+      }
       if (!res.ok) throw new Error(`save ${res.status}`);
     }
 
