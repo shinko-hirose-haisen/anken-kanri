@@ -26,6 +26,7 @@
     const REDIRECT  = "https://shinko-hirose-haisen.github.io/anken-kanri/";
     const SCOPES    = ["Files.ReadWrite", "User.Read"];
     const FILE_NAME = "営業用/anken-kanri-data.json";
+    const FILE_ID   = "01WEYQQKMBSAKYHCJ6ZNDJNKTMJOR3IQXK"; // 直接IDで指定（日本語パス回避）
     const SAVE_MS   = 2000;
 
     // ─── PKCE認証ヘルパー ─────────────────────────────────────
@@ -46,7 +47,7 @@
     // ─── OneDrive API ─────────────────────────────────────────
     async function odLoad(token) {
       const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}/content`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       if (res.status === 404) return null;
@@ -55,7 +56,7 @@
     }
     async function odSave(token, cases, clients) {
       const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root:/${FILE_NAME}:/content`,
+        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}/content`,
         {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
