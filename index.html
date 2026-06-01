@@ -45,18 +45,51 @@
     function clearToken() { try { sessionStorage.removeItem("anken_token"); } catch {} }
 
     // ─── OneDrive API ─────────────────────────────────────────
-    async function odLoad(token) {
-      const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}/content`,
+    // ファイルのdriveId+itemIdを取得（自分 or 共有ファイルから）
+    async function resolveFileRef(token) {
+      // まず自分のドライブで試みる
+      const r1 = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`load ${res.status}`);
-      return res.json();
+      if (r1.ok) {
+        const d = await r1.json();
+        return { driveId: d.parentReference.driveId, itemId: d.id };
+      }
+      // 見つからなければ共有アイテムから探す
+      const r2 = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/sharedWithMe`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!r2.ok) throw new Error(`sharedWithMe ${r2.status}`);
+      const shared = await r2.json();
+      const found = shared.value.find(f => f.name === "anken-kanri-data.json");
+      if (!found) throw new Error("共有ファイルが見つかりません");
+      return {
+        driveId: found.remoteItem.parentReference.driveId,
+        itemId:  found.remoteItem.id
+      };
+    }
+
+    async function odLoad(token) {
+      try {
+        const { driveId, itemId } = await resolveFileRef(token);
+        const res = await fetch(
+          `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`load ${res.status}`);
+        return res.json();
+      } catch(e) {
+        console.error("odLoad error:", e);
+        return null;
+      }
     }
     async function odSave(token, cases, clients) {
+      const { driveId, itemId } = await resolveFileRef(token);
       const res = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}/content`,
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`,
         {
           method: "PUT",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
