@@ -20,30 +20,83 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // ─── Supabase設定 ─────────────────────────────────────────
-    const SUPABASE_URL = "https://nktwovvkirfgclvcietq.supabase.co";
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5rdHdvdnZraXJmZ2NsdmNpZXRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxMjM4OTYsImV4cCI6MjA5NTY5OTg5Nn0.MtuDR6ktLbERQrLa9chwsyrNkG2x7ogU_H7hNobFtaw";
-    const APP_PASSWORD = "pw8835441";
-    const SAVE_MS = 2000;
+    // ─── Azure / Microsoft設定 ────────────────────────────────
+    const CLIENT_ID = "31411124-c9a3-4c1a-b357-343c1650b98c";
+    const TENANT    = "shinko1.onmicrosoft.com";
+    const REDIRECT  = "https://shinko-hirose-haisen.github.io/anken-kanri/";
+    const SCOPES    = ["Files.ReadWrite", "User.Read"];
+    const FILE_NAME = "営業用/anken-kanri-data.json";
+    const FILE_ID   = "01WEYQQKMBSAKYHCJ6ZNDJNKTMJOR3IQXK"; // 直接IDで指定（日本語パス回避）
+    const SAVE_MS   = 2000;
 
-    async function sbLoad() {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients`, {
-        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-      });
-      if (!res.ok) throw new Error(`load error ${res.status}`);
-      const rows = await res.json();
-      return rows[0] || { cases: [], clients: [] };
+    // ─── PKCE認証ヘルパー ─────────────────────────────────────
+    function b64url(buf) {
+      return btoa(String.fromCharCode(...new Uint8Array(buf)))
+        .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
     }
-    async function sbSave(cases, clients) {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main`, {
-        method: "PATCH",
-        headers: {
-          apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-          "Content-Type": "application/json", Prefer: "return=minimal"
-        },
-        body: JSON.stringify({ cases, clients, updated_at: new Date().toISOString() })
-      });
-      if (!res.ok) throw new Error(`save error ${res.status}`);
+    async function genPKCE() {
+      const v = b64url(crypto.getRandomValues(new Uint8Array(32)));
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(v));
+      return { verifier: v, challenge: b64url(d) };
+    }
+
+    function saveToken(t) { try { sessionStorage.setItem("anken_token", JSON.stringify(t)); } catch {} }
+    function loadToken() { try { return JSON.parse(sessionStorage.getItem("anken_token")); } catch { return null; } }
+    function clearToken() { try { sessionStorage.removeItem("anken_token"); } catch {} }
+
+    // ─── OneDrive API ─────────────────────────────────────────
+    // ファイルのdriveId+itemIdを取得（自分 or 共有ファイルから）
+    async function resolveFileRef(token) {
+      // まず自分のドライブで試みる
+      const r1 = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/items/${FILE_ID}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (r1.ok) {
+        const d = await r1.json();
+        return { driveId: d.parentReference.driveId, itemId: d.id };
+      }
+      // 見つからなければ共有アイテムから探す
+      const r2 = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/sharedWithMe`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!r2.ok) throw new Error(`sharedWithMe ${r2.status}`);
+      const shared = await r2.json();
+      const found = shared.value.find(f => f.name === "anken-kanri-data.json");
+      if (!found) throw new Error("共有ファイルが見つかりません");
+      return {
+        driveId: found.remoteItem.parentReference.driveId,
+        itemId:  found.remoteItem.id
+      };
+    }
+
+    async function odLoad(token) {
+      try {
+        const { driveId, itemId } = await resolveFileRef(token);
+        const res = await fetch(
+          `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`load ${res.status}`);
+        return res.json();
+      } catch(e) {
+        console.error("odLoad error:", e);
+        return null;
+      }
+    }
+    async function odSave(token, cases, clients) {
+      const { driveId, itemId } = await resolveFileRef(token);
+      const res = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`,
+        {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ cases, clients }),
+        }
+      );
+      if (!res.ok) throw new Error(`save ${res.status}`);
     }
 
     // ─── 定数・ヘルパー ───────────────────────────────────────
@@ -87,12 +140,14 @@
       return c.client||"";
     }
 
+    // ─── スタイル ─────────────────────────────────────────────
     const S = {
       label: { display:"block", fontSize:11, color:"#64748b", marginBottom:3, fontWeight:700 },
       input: { width:"100%", padding:"9px 11px", borderRadius:8, border:"1.5px solid #e2e8f0", fontSize:14, color:"#1e293b", background:"#f8fafc", boxSizing:"border-box" },
       btn: (bg, color="#fff") => ({ background:bg, color, border:"none", borderRadius:8, padding:"10px 18px", fontWeight:700, cursor:"pointer", fontSize:14 }),
     };
 
+    // ─── 共通コンポーネント ───────────────────────────────────
     function Field({ label, value, onChange, type="text", placeholder, rows }) {
       const el = rows
         ? <textarea value={value} onChange={e=>onChange(e.target.value)} rows={rows} placeholder={placeholder} style={{...S.input,resize:"vertical"}} />
@@ -113,43 +168,13 @@
       );
     }
     function SaveIndicator({ state }) {
-      const map = { saving:"保存中…", saved:"✓ 保存済み", error:"保存失敗" };
+      const map = { saving:"保存中…", saved:"✓ OneDriveに保存済み", error:"保存失敗" };
       const col  = { saving:"#94a3b8", saved:"#22c55e", error:"#ef4444" };
       if (state==="idle") return null;
       return <div style={{textAlign:"center",fontSize:11,color:col[state],padding:"4px 0",background:"#f0fdf4"}}>{map[state]}</div>;
     }
 
-    // ─── パスワード画面 ───────────────────────────────────────
-    function PasswordScreen({ onUnlock }) {
-      const [pw, setPw] = useState("");
-      const [error, setError] = useState("");
-      function check() {
-        if (pw === APP_PASSWORD) {
-          sessionStorage.setItem("anken_unlocked", "1");
-          onUnlock();
-        } else {
-          setError("パスワードが違います");
-          setPw("");
-        }
-      }
-      return (
-        <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <div style={{background:"#fff",borderRadius:16,padding:32,maxWidth:320,width:"100%",margin:"0 16px",boxShadow:"0 4px 20px #0002",textAlign:"center"}}>
-            <div style={{fontSize:48,marginBottom:12}}>🚢</div>
-            <div style={{fontWeight:800,fontSize:20,color:"#0f2744",marginBottom:8}}>案件管理</div>
-            <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>パスワードを入力してください</div>
-            <input type="password" value={pw} onChange={e=>setPw(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&check()}
-              placeholder="パスワード" style={{...S.input,marginBottom:12,textAlign:"center",fontSize:18,letterSpacing:4}} />
-            {error && <div style={{color:"#dc2626",fontSize:12,marginBottom:12}}>{error}</div>}
-            <button onClick={check} style={{...S.btn("#0f2744"),width:"100%",fontSize:15,padding:"12px"}}>
-              ログイン
-            </button>
-          </div>
-        </div>
-      );
-    }
-
+    // ─── ClientSelector ───────────────────────────────────────
     function ClientSelector({ c, clients, onChange }) {
       const cid = String(c.clientId||"");
       const selectedClient = clients.find(cl=>String(cl.id)===cid);
@@ -184,6 +209,7 @@
       );
     }
 
+    // ─── DeleteConfirm ────────────────────────────────────────
     function DeleteConfirm({ onDelete }) {
       const [open, setOpen] = useState(false);
       if (!open) return <div style={{padding:"16px 16px 0"}}><button onClick={()=>setOpen(true)} style={{...S.btn("#fee2e2","#dc2626"),width:"100%",border:"1px solid #fca5a5"}}>🗑️ この案件を削除</button></div>;
@@ -198,8 +224,11 @@
       );
     }
 
+    // ─── CaseDetail ───────────────────────────────────────────
     function CaseDetail({ c, onChange, onBack, onDelete, clients }) {
-      const [tabVal, setTabVal] = useState("basic");
+      const [tab,memo,setTab,setMemo] = [useState("basic"),useState(""),null,null].reduce((a,v,i)=>i<2?[...a,v[0],v[1]]:[...a,v],[]);
+      // 上記は読みにくいので分解
+      const [tabVal,  setTabVal]  = useState("basic");
       const [memoVal, setMemoVal] = useState("");
       function field(key, value) {
         const updated = {...c, [key]:value};
@@ -234,7 +263,7 @@
                 <label style={S.label}>作業予定時期</label>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                   <input type="checkbox" checked={!!c.workUndecided} onChange={e=>field("workUndecided",e.target.checked)} style={{width:16,height:16,cursor:"pointer"}} />
-                  <span style={{fontSize:14,color:"#475569"}}>時期未定</span>
+                  <span style={{fontSize:14,color:"#475569",cursor:"pointer"}}>時期未定</span>
                 </div>
                 {!c.workUndecided && <div style={{display:"flex",gap:6}}>
                   <select value={c.workYear||""} onChange={e=>field("workYear",e.target.value)} style={{...S.input,flex:2}}>
@@ -290,6 +319,7 @@
       );
     }
 
+    // ─── CaseCard ─────────────────────────────────────────────
     function CaseCard({ c, onClick, clients }) {
       const color = STATUS_LIST.find(s=>s.key===c.status)?.color||"#ccc";
       const needsAlert = c.shipType==="借り船（傭船）" && !["completed","lost"].includes(c.status) && !(c.subEstimates||[]).length;
@@ -314,6 +344,7 @@
       );
     }
 
+    // ─── ClientManager ────────────────────────────────────────
     function ContactRow({ ct, onUpdate, onDelete }) {
       const [open, setOpen] = useState(false);
       return (
@@ -375,6 +406,7 @@
       );
     }
 
+    // ─── DataIO ───────────────────────────────────────────────
     function DataIO({ cases, clients, onImport, onClose }) {
       const [importText, setImportText] = useState("");
       const [msg, setMsg] = useState("");
@@ -411,48 +443,120 @@
       );
     }
 
+    // ─── LoginScreen ──────────────────────────────────────────
+    function LoginScreen() {
+      const [loading, setLoading] = useState(false);
+      const [error, setError]     = useState("");
+      async function doLogin() {
+        setLoading(true); setError("");
+        try {
+          const { verifier, challenge } = await genPKCE();
+          sessionStorage.setItem("pkce_verifier", verifier);
+          const params = new URLSearchParams({
+            client_id: CLIENT_ID, response_type: "code",
+            redirect_uri: REDIRECT,
+            scope: SCOPES.join(" ") + " offline_access",
+            code_challenge: challenge, code_challenge_method: "S256",
+            response_mode: "query",
+          });
+          window.location.href = `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/authorize?${params}`;
+        } catch(e) { setError(e.message); setLoading(false); }
+      }
+      return (
+        <div style={{minHeight:"100vh",background:"#f1f5f9",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#fff",borderRadius:16,padding:32,maxWidth:340,width:"100%",margin:"0 16px",boxShadow:"0 4px 20px #0002",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:12}}>🚢</div>
+            <div style={{fontWeight:800,fontSize:20,color:"#0f2744",marginBottom:8}}>案件管理</div>
+            <div style={{fontSize:13,color:"#64748b",marginBottom:24}}>Microsoftアカウントでログインして<br/>OneDriveにデータを保存します</div>
+            <button onClick={doLogin} disabled={loading} style={{...S.btn("#0f2744"),width:"100%",fontSize:15,padding:"14px",opacity:loading?0.6:1}}>
+              {loading ? "リダイレクト中…" : "🔑 Microsoftでログイン"}
+            </button>
+            {error && <div style={{marginTop:12,fontSize:12,color:"#dc2626"}}>{error}</div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Main App ─────────────────────────────────────────────
     function App() {
-      const [unlocked, setUnlocked] = useState(!!sessionStorage.getItem("anken_unlocked"));
-      const [cases,   setCases]   = useState([]);
-      const [clients, setClients] = useState([]);
-      const [loading, setLoading] = useState(true);
+      const [token,     setToken]     = useState(null);
+      const [authState, setAuthState] = useState("checking");
+      const [authError, setAuthError] = useState("");
+      const [cases,     setCases]     = useState([]);
+      const [clients,   setClients]   = useState([]);
+      const [loading,   setLoading]   = useState(true);
       const [saveState, setSaveState] = useState("idle");
       const [view,       setView]       = useState("list");
       const [selectedId, setSelectedId] = useState(null);
       const [filterStatus, setFilterStatus] = useState("all");
-      const [showLost,     setShowLost]     = useState(false);
+      const [showLost, setShowLost] = useState(false);
       const [sortOrder,    setSortOrder]    = useState("none");
       const [filterYear,   setFilterYear]   = useState("");
       const [filterMonth,  setFilterMonth]  = useState("");
       const [search, setSearch] = useState("");
       const saveTimer = useRef(null);
 
+      // 認証処理
       useEffect(() => {
-        if (!unlocked) return;
+        (async () => {
+          const params = new URLSearchParams(window.location.search);
+          const code   = params.get("code");
+          const verifier = sessionStorage.getItem("pkce_verifier");
+          if (code && verifier) {
+            try {
+              const res = await fetch(`https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                  client_id: CLIENT_ID, grant_type: "authorization_code", code,
+                  redirect_uri: REDIRECT, code_verifier: verifier,
+                  scope: SCOPES.join(" ") + " offline_access",
+                }),
+              });
+              const data = await res.json();
+              if (data.access_token) {
+                saveToken(data); setToken(data.access_token);
+                sessionStorage.removeItem("pkce_verifier");
+                window.history.replaceState({}, "", window.location.pathname);
+                setAuthState("ready");
+              } else throw new Error(data.error_description||"トークン取得失敗");
+            } catch(e) { setAuthError(e.message); setAuthState("error"); }
+            return;
+          }
+          const saved = loadToken();
+          if (saved?.access_token) { setToken(saved.access_token); setAuthState("ready"); }
+          else setAuthState("login");
+        })();
+      }, []);
+
+      // データ読み込み
+      useEffect(() => {
+        if (authState !== "ready" || !token) return;
         (async () => {
           try {
-            const data = await sbLoad();
-            if (data.cases)   setCases(data.cases);
-            if (data.clients) setClients(data.clients);
+            const data = await odLoad(token);
+            if (data) { setCases(data.cases||[]); setClients(data.clients||[]); }
           } catch(e) { console.error(e); }
           setLoading(false);
         })();
-      }, [unlocked]);
+      }, [authState, token]);
 
+      // 自動保存
       useEffect(() => {
-        if (loading || !unlocked) return;
+        if (loading || !token) return;
         setSaveState("saving");
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(async () => {
           try {
-            await sbSave(cases, clients);
+            await odSave(token, cases, clients);
             setSaveState("saved");
             setTimeout(()=>setSaveState("idle"), 2500);
-          } catch(e) { console.error(e); setSaveState("error"); }
+          } catch(e) {
+            setSaveState("error");
+            if (e.message.includes("401")) { clearToken(); setAuthState("login"); }
+          }
         }, SAVE_MS);
       }, [cases, clients]);
-
-      if (!unlocked) return <PasswordScreen onUnlock={()=>setUnlocked(true)} />;
 
       const selected = cases.find(c=>c.id===selectedId);
       const alertCases = cases.filter(c=>c.shipType==="借り船（傭船）"&&!["completed","lost"].includes(c.status)&&!(c.subEstimates||[]).length);
@@ -478,7 +582,10 @@
       function deleteCase(id) { setCases(prev=>prev.filter(c=>c.id!==id)); setView("list"); }
       function addCase() { const nc=emptyCase(); setCases(prev=>[nc,...prev]); setSelectedId(nc.id); setView("detail"); }
 
-      if (loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#64748b"}}><div style={{fontSize:32,marginBottom:8}}>🚢</div><div>読み込み中…</div></div></div>;
+      if (authState==="checking") return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#64748b"}}><div style={{fontSize:32,marginBottom:8}}>🚢</div><div>認証確認中…</div></div></div>;
+      if (authState==="login")    return <LoginScreen />;
+      if (authState==="error")    return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#dc2626",padding:32}}><div style={{fontSize:32,marginBottom:8}}>⚠️</div><div style={{marginBottom:16}}>{authError}</div><button onClick={()=>{clearToken();setAuthState("login");}} style={S.btn("#0f2744")}>再ログイン</button></div></div>;
+      if (loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#64748b"}}><div style={{fontSize:32,marginBottom:8}}>🚢</div><div>OneDriveからデータ読み込み中…</div></div></div>;
       if (view==="dataio")  return <DataIO cases={cases} clients={clients} onImport={(c,cl)=>{setCases(c);setClients(cl);}} onClose={()=>setView("list")} />;
       if (view==="clients") return <ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} />;
       if (view==="detail"&&selected) return <CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} />;
@@ -489,7 +596,7 @@
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
               <button onClick={()=>setView("dataio")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>引き継ぎ</button>
               <button onClick={()=>setView("clients")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>顧客管理</button>
-              <button onClick={()=>{sessionStorage.removeItem("anken_unlocked");setUnlocked(false);}} style={{background:"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.7)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"5px 11px",fontSize:11,cursor:"pointer"}}>ロック</button>
+              <button onClick={()=>{clearToken();setAuthState("login");}} style={{background:"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.7)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"5px 11px",fontSize:11,cursor:"pointer"}}>ログアウト</button>
             </div>
           } />
           <SaveIndicator state={saveState} />
