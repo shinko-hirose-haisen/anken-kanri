@@ -27,23 +27,33 @@
     const SAVE_MS = 2000;
 
     async function sbLoad() {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients,meetings,updated_at`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
       if (!res.ok) throw new Error(`load error ${res.status}`);
       const rows = await res.json();
-      return rows[0] || { cases: [], clients: [] };
+      return rows[0] || { cases: [], clients: [], meetings: [], updated_at: null };
     }
-    async function sbSave(cases, clients) {
+    async function sbCheckUpdatedAt() {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=updated_at`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+      });
+      if (!res.ok) throw new Error(`check error ${res.status}`);
+      const rows = await res.json();
+      return rows[0]?.updated_at || null;
+    }
+    async function sbSave(cases, clients, meetings) {
+      const nowIso = new Date().toISOString();
       const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main`, {
         method: "PATCH",
         headers: {
           apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
           "Content-Type": "application/json", Prefer: "return=minimal"
         },
-        body: JSON.stringify({ cases, clients, updated_at: new Date().toISOString() })
+        body: JSON.stringify({ cases, clients, meetings, updated_at: nowIso })
       });
       if (!res.ok) throw new Error(`save error ${res.status}`);
+      return nowIso;
     }
 
     // ─── 定数・ヘルパー ───────────────────────────────────────
@@ -69,6 +79,7 @@
     });
     const emptySubEstimate = () => ({ id:String(Date.now()), vendor:"", amount:"" });
     const emptyContact     = () => ({ id:String(Date.now()), name:"", tel:"", email:"", memo:"" });
+    const emptyMeeting = (caseId, clientId) => ({ id:String(Date.now()), date:dateStr(), caseId:caseId||"", clientId:clientId||"", contactId:"", content:"" });
     const JUN_LABELS = ["","上旬","中旬","下旬"];
     function fmtWorkTime(c) {
       if (c.workUndecided) return "時期未定";
@@ -113,10 +124,71 @@
       );
     }
     function SaveIndicator({ state }) {
-      const map = { saving:"保存中…", saved:"✓ 保存済み", error:"保存失敗" };
-      const col  = { saving:"#94a3b8", saved:"#22c55e", error:"#ef4444" };
+      const map = { saving:"保存中…", saved:"✓ 保存済み", error:"保存失敗（再試行します）", conflict:"⚠ 他の人の更新を確認中…" };
+      const col  = { saving:"#94a3b8", saved:"#22c55e", error:"#ef4444", conflict:"#b45309" };
       if (state==="idle") return null;
       return <div style={{textAlign:"center",fontSize:11,color:col[state],padding:"4px 0",background:"#f0fdf4"}}>{map[state]}</div>;
+    }
+    function MeetingRow({ m, clients, cases, showCase, onDelete }) {
+      const cl = clients.find(c=>String(c.id)===String(m.clientId));
+      const ct = cl?.contacts?.find(c=>String(c.id)===String(m.contactId));
+      const cs = cases.find(c=>String(c.id)===String(m.caseId));
+      return (
+        <div style={{borderLeft:"3px solid #cbd5e1",paddingLeft:12,position:"relative"}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:"#94a3b8"}}>{m.date}</span>
+            {cl && <span style={{background:"#f1f5f9",fontSize:11,padding:"2px 8px",borderRadius:8,fontWeight:700,color:"#334155"}}>{cl.name}{ct&&`（${ct.name}）`}</span>}
+            {showCase && cs && <span style={{background:"#dcfce7",fontSize:11,padding:"2px 8px",borderRadius:8,fontWeight:700,color:"#15803d"}}>{cs.title||"件名未入力"}</span>}
+            {onDelete && <button onClick={onDelete} style={{marginLeft:"auto",background:"none",border:"none",color:"#cbd5e1",fontSize:12,cursor:"pointer"}}>✕</button>}
+          </div>
+          <div style={{fontSize:13,color:"#334155",marginTop:3,whiteSpace:"pre-wrap"}}>{m.content}</div>
+        </div>
+      );
+    }
+    function MeetingForm({ initialClientId, clients, onAdd }) {
+      const [clientId, setClientId] = useState(initialClientId||"");
+      const [contactId, setContactId] = useState("");
+      const [date, setDate] = useState(dateStr());
+      const [content, setContent] = useState("");
+      const contacts = clients.find(c=>String(c.id)===String(clientId))?.contacts||[];
+      function submit() {
+        if (!content.trim()) return;
+        onAdd({ date, clientId, contactId, content: content.trim() });
+        setContent(""); setContactId("");
+      }
+      return (
+        <div style={{background:"#f8fafc",borderRadius:10,padding:"12px 12px 10px",marginBottom:14,border:"1px solid #e2e8f0"}}>
+          <div style={{display:"flex",gap:6,marginBottom:8}}>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.input,flex:1,fontSize:13,padding:"7px 9px"}} />
+            <select value={clientId} onChange={e=>{setClientId(e.target.value);setContactId("");}} style={{...S.input,flex:2,fontSize:13,padding:"7px 9px"}}>
+              <option value="">取引先を選択…</option>
+              {clients.map(cl=><option key={cl.id} value={cl.id}>{cl.name}</option>)}
+            </select>
+          </div>
+          {contacts.length>0 && <select value={contactId} onChange={e=>setContactId(e.target.value)} style={{...S.input,fontSize:13,padding:"7px 9px",marginBottom:8}}>
+            <option value="">担当者（任意）</option>
+            {contacts.map(ct=><option key={ct.id} value={ct.id}>{ct.name}</option>)}
+          </select>}
+          <textarea value={content} onChange={e=>setContent(e.target.value)} rows={3} placeholder="打合せ内容を入力…" style={{...S.input,resize:"vertical",marginBottom:8}} />
+          <button onClick={submit} disabled={!content.trim()} style={{...S.btn("#0f2744"),width:"100%",fontSize:13,opacity:content.trim()?1:0.5}}>＋ 打合せ記録を追加</button>
+        </div>
+      );
+    }
+    function ConflictModal({ onReload, onForceSave }) {
+      return (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
+          <div style={{background:"#fff",borderRadius:12,padding:"22px 20px",maxWidth:340,width:"100%",boxShadow:"0 8px 30px #0003"}}>
+            <div style={{fontSize:15,fontWeight:800,color:"#92400e",marginBottom:10}}>⚠️ 他の人がデータを更新しました</div>
+            <div style={{fontSize:13,color:"#475569",lineHeight:1.6,marginBottom:18}}>
+              あなたが編集している間に、別の端末でデータが更新されました。このまま保存すると相手の変更が消えてしまう可能性があります。
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button onClick={onReload} style={{...S.btn("#0f2744"),width:"100%"}}>最新データを取得する（自分の変更は失われます）</button>
+              <button onClick={onForceSave} style={{...S.btn("#fee2e2","#dc2626"),width:"100%"}}>それでも自分の変更で上書き保存する</button>
+            </div>
+          </div>
+        </div>
+      );
     }
 
     // ─── パスワード画面 ───────────────────────────────────────
@@ -198,7 +270,7 @@
       );
     }
 
-    function CaseDetail({ c, onChange, onBack, onDelete, clients }) {
+    function CaseDetail({ c, onChange, onBack, onDelete, clients, meetings, onAddMeeting, onDeleteMeeting }) {
       const [tabVal, setTabVal] = useState("basic");
       const [memoVal, setMemoVal] = useState("");
       function field(key, value) {
@@ -218,10 +290,11 @@
         <button onClick={()=>setTabVal(t)} style={{ padding:"8px 14px", border:"none", borderRadius:"8px 8px 0 0", fontSize:13, cursor:"pointer", fontWeight:tabVal===t?700:400, background:tabVal===t?"#fff":"#e8edf3", color:tabVal===t?"#0f2744":"#64748b" }}>{label}</button>
       );
       const isBorrowed = c.shipType==="借り船（傭船）";
+      const caseMeetings = (meetings||[]).filter(m=>String(m.caseId)===String(c.id));
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:48}}>
           <TopBar title={clientDisplayName(c,clients)||"依頼元未入力"} onBack={onBack} right={<StatusBadge statusKey={c.status} />} />
-          <div style={{display:"flex",padding:"10px 16px 0",gap:3}}>{tabBtn("basic","基本情報")}{tabBtn("estimate","見積もり")}{tabBtn("history","進捗履歴")}</div>
+          <div style={{display:"flex",padding:"10px 16px 0",gap:3,overflowX:"auto"}}>{tabBtn("basic","基本情報")}{tabBtn("estimate","見積もり")}{tabBtn("meetings","打合せ記録")}{tabBtn("history","進捗履歴")}</div>
           <div style={{background:"#fff",padding:16,boxShadow:"0 1px 3px #0001"}}>
             {tabVal==="basic" && <>
               <ClientSelector c={c} clients={clients} onChange={onChange} />
@@ -269,6 +342,15 @@
                 <button onClick={()=>onChange({...c,subEstimates:[...(c.subEstimates||[]),emptySubEstimate()]})} style={{...S.btn("#e8edf3","#0f2744"),width:"100%",marginBottom:14,fontSize:13}}>＋ 下見積もり先を追加</button>
               </>}
               <Field label="備考・特記事項" value={c.notes} onChange={v=>field("notes",v)} rows={4} placeholder="積み地、揚げ地、荷物の種類など" />
+            </>}
+            {tabVal==="meetings" && <>
+              <MeetingForm initialClientId={c.clientId} clients={clients} onAdd={data=>onAddMeeting({...data, caseId:c.id})} />
+              {caseMeetings.length===0 && <div style={{textAlign:"center",color:"#94a3b8",padding:"24px 0",fontSize:13}}>この案件の打合せ記録はまだありません</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {[...caseMeetings].sort((a,b)=>b.date.localeCompare(a.date)).map(m=>(
+                  <MeetingRow key={m.id} m={m} clients={clients} cases={[c]} onDelete={()=>onDeleteMeeting(m.id)} />
+                ))}
+              </div>
             </>}
             {tabVal==="history" && <>
               <div style={{display:"flex",gap:8,marginBottom:16}}>
@@ -332,9 +414,10 @@
         </div>
       );
     }
-    function ClientCard({ cl, onUpdate, onDelete }) {
+    function ClientCard({ cl, onUpdate, onDelete, meetings, cases }) {
       const [open, setOpen] = useState(false);
       const contacts = cl.contacts||[];
+      const clientMeetings = (meetings||[]).filter(m=>String(m.clientId)===String(cl.id));
       return (
         <div style={{background:"#fff",borderRadius:12,marginBottom:10,boxShadow:"0 1px 3px #0001",overflow:"hidden"}}>
           <div onClick={()=>setOpen(o=>!o)} style={{padding:"13px 15px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
@@ -353,12 +436,21 @@
               {contacts.map(ct=><ContactRow key={ct.id} ct={ct} onUpdate={updated=>onUpdate({...cl,contacts:contacts.map(c=>c.id===updated.id?updated:c)})} onDelete={()=>onUpdate({...cl,contacts:contacts.filter(c=>c.id!==ct.id)})} />)}
               <button onClick={()=>onUpdate({...cl,contacts:[...contacts,emptyContact()]})} style={{...S.btn("#e8edf3","#0f2744"),width:"100%",fontSize:13,marginTop:4}}>＋ 担当者を追加</button>
             </div>
+            <div style={{marginBottom:10}}>
+              <label style={S.label}>打合せ履歴（全案件横断）</label>
+              {clientMeetings.length===0 && <div style={{fontSize:13,color:"#94a3b8",marginBottom:4}}>打合せ記録はまだありません</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:6}}>
+                {[...clientMeetings].sort((a,b)=>b.date.localeCompare(a.date)).map(m=>(
+                  <MeetingRow key={m.id} m={m} clients={[cl]} cases={cases||[]} showCase />
+                ))}
+              </div>
+            </div>
             <button onClick={onDelete} style={{fontSize:12,color:"#dc2626",background:"none",border:"none",cursor:"pointer",padding:0}}>🗑️ この依頼元を削除</button>
           </div>}
         </div>
       );
     }
-    function ClientManager({ clients, onClose, onUpdate }) {
+    function ClientManager({ clients, onClose, onUpdate, meetings, cases }) {
       const [name, setName] = useState("");
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:40}}>
@@ -369,24 +461,24 @@
               <Field label="依頼元名（会社名）" value={name} onChange={setName} placeholder="例：〇〇株式会社" />
               <button onClick={()=>{ if(!name.trim()) return; onUpdate([...clients,{id:String(Date.now()),name:name.trim(),memo:"",contacts:[]}]); setName(""); }} style={{...S.btn("#0f2744"),width:"100%"}}>追加</button>
             </div>
-            {clients.map(cl=><ClientCard key={cl.id} cl={cl} onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))} onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))} />)}
+            {clients.map(cl=><ClientCard key={cl.id} cl={cl} onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))} onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))} meetings={meetings} cases={cases} />)}
           </div>
         </div>
       );
     }
 
-    function DataIO({ cases, clients, onImport, onClose }) {
+    function DataIO({ cases, clients, meetings, onImport, onClose }) {
       const [importText, setImportText] = useState("");
       const [msg, setMsg] = useState("");
       function doExport() {
-        const data = JSON.stringify({ cases, clients }, null, 2);
+        const data = JSON.stringify({ cases, clients, meetings }, null, 2);
         navigator.clipboard.writeText(data).then(()=>setMsg("✓ クリップボードにコピーしました")).catch(()=>setMsg("コピー失敗。下のテキストを手動でコピーしてください"));
       }
       function doImport() {
         try {
           const parsed = JSON.parse(importText);
           if (!Array.isArray(parsed.cases)||!Array.isArray(parsed.clients)) throw new Error();
-          onImport(parsed.cases, parsed.clients);
+          onImport(parsed.cases, parsed.clients, Array.isArray(parsed.meetings)?parsed.meetings:[]);
           setMsg("✓ 取り込み完了！");
           setImportText("");
         } catch { setMsg("エラー：正しいデータではありません"); }
@@ -398,11 +490,11 @@
             <div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 3px #0001"}}>
               <div style={{fontWeight:700,color:"#0f2744",marginBottom:8}}>📤 データを書き出す</div>
               <button onClick={doExport} style={{...S.btn("#0f2744"),width:"100%",marginBottom:10}}>クリップボードにコピー</button>
-              <textarea readOnly value={JSON.stringify({cases,clients},null,2)} rows={6} style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical"}} onClick={e=>e.target.select()} />
+              <textarea readOnly value={JSON.stringify({cases,clients,meetings},null,2)} rows={6} style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical"}} onClick={e=>e.target.select()} />
             </div>
             <div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 3px #0001"}}>
               <div style={{fontWeight:700,color:"#0f2744",marginBottom:8}}>📥 データを取り込む</div>
-              <textarea value={importText} onChange={e=>setImportText(e.target.value)} rows={6} placeholder='{"cases":[...],"clients":[...]} の形式で貼り付け' style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical",marginBottom:10}} />
+              <textarea value={importText} onChange={e=>setImportText(e.target.value)} rows={6} placeholder='{"cases":[...],"clients":[...],"meetings":[...]} の形式で貼り付け' style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical",marginBottom:10}} />
               <button onClick={doImport} style={{...S.btn("#15803d"),width:"100%"}} disabled={!importText.trim()}>取り込む</button>
             </div>
             {msg && <div style={{background:msg.startsWith("✓")?"#f0fdf4":"#fee2e2",borderRadius:8,padding:"10px 14px",fontSize:13,color:msg.startsWith("✓")?"#15803d":"#dc2626",fontWeight:600}}>{msg}</div>}
@@ -415,6 +507,7 @@
       const [unlocked, setUnlocked] = useState(!!sessionStorage.getItem("anken_unlocked"));
       const [cases,   setCases]   = useState([]);
       const [clients, setClients] = useState([]);
+      const [meetings, setMeetings] = useState([]);
       const [loading, setLoading] = useState(true);
       const [saveState, setSaveState] = useState("idle");
       const [view,       setView]       = useState("list");
@@ -425,32 +518,83 @@
       const [filterYear,   setFilterYear]   = useState("");
       const [filterMonth,  setFilterMonth]  = useState("");
       const [search, setSearch] = useState("");
-      const saveTimer = useRef(null);
+      const [conflict, setConflict] = useState(false);
+      const saveTimer  = useRef(null);
+      const retryTimer = useRef(null);
+      const lastKnownUpdatedAt = useRef(null); // 自分が最後に取得/保存した時点のサーバー側updated_at
+      const isEditing = useRef(false);         // 直近の編集操作からの猶予中かどうか
+
+      async function reloadFromServer() {
+        try {
+          const data = await sbLoad();
+          if (data.cases)    setCases(data.cases);
+          if (data.clients)  setClients(data.clients);
+          setMeetings(data.meetings||[]);
+          lastKnownUpdatedAt.current = data.updated_at || null;
+        } catch(e) { console.error(e); }
+      }
 
       useEffect(() => {
         if (!unlocked) return;
         (async () => {
-          try {
-            const data = await sbLoad();
-            if (data.cases)   setCases(data.cases);
-            if (data.clients) setClients(data.clients);
-          } catch(e) { console.error(e); }
+          await reloadFromServer();
           setLoading(false);
         })();
       }, [unlocked]);
 
+      // タブが再アクティブになったとき、編集中でなければ最新データを自動取得
+      useEffect(() => {
+        if (!unlocked) return;
+        async function onVisible() {
+          if (document.visibilityState !== "visible") return;
+          if (loading || isEditing.current || conflict) return;
+          try {
+            const serverUpdatedAt = await sbCheckUpdatedAt();
+            if (serverUpdatedAt && serverUpdatedAt !== lastKnownUpdatedAt.current) {
+              await reloadFromServer();
+            }
+          } catch(e) { console.error(e); }
+        }
+        document.addEventListener("visibilitychange", onVisible);
+        window.addEventListener("focus", onVisible);
+        return () => {
+          document.removeEventListener("visibilitychange", onVisible);
+          window.removeEventListener("focus", onVisible);
+        };
+      }, [unlocked, loading, conflict]);
+
+      async function doSave(force) {
+        clearTimeout(retryTimer.current);
+        setSaveState("saving");
+        try {
+          if (!force) {
+            const serverUpdatedAt = await sbCheckUpdatedAt();
+            if (serverUpdatedAt && lastKnownUpdatedAt.current && serverUpdatedAt !== lastKnownUpdatedAt.current) {
+              // 他端末が自分の最後の取得後に保存している → 競合
+              setSaveState("idle");
+              setConflict(true);
+              return;
+            }
+          }
+          const nowIso = await sbSave(cases, clients, meetings);
+          lastKnownUpdatedAt.current = nowIso;
+          isEditing.current = false;
+          setSaveState("saved");
+          setTimeout(()=>setSaveState("idle"), 2500);
+        } catch(e) {
+          console.error(e);
+          setSaveState("error");
+          retryTimer.current = setTimeout(()=>doSave(force), 10000); // 10秒後に自動リトライ
+        }
+      }
+
       useEffect(() => {
         if (loading || !unlocked) return;
-        setSaveState("saving");
+        isEditing.current = true;
         clearTimeout(saveTimer.current);
-        saveTimer.current = setTimeout(async () => {
-          try {
-            await sbSave(cases, clients);
-            setSaveState("saved");
-            setTimeout(()=>setSaveState("idle"), 2500);
-          } catch(e) { console.error(e); setSaveState("error"); }
-        }, SAVE_MS);
-      }, [cases, clients]);
+        saveTimer.current = setTimeout(() => doSave(false), SAVE_MS);
+        return () => clearTimeout(saveTimer.current);
+      }, [cases, clients, meetings]);
 
       if (!unlocked) return <PasswordScreen onUnlock={()=>setUnlocked(true)} />;
 
@@ -475,13 +619,25 @@
       });
       const activeCount = cases.filter(c=>!["completed","lost"].includes(c.status)).length;
       function updateCase(u) { setCases(prev=>prev.map(c=>c.id===u.id?u:c)); }
-      function deleteCase(id) { setCases(prev=>prev.filter(c=>c.id!==id)); setView("list"); }
+      function deleteCase(id) {
+        setCases(prev=>prev.filter(c=>c.id!==id));
+        setMeetings(prev=>prev.filter(m=>String(m.caseId)!==String(id)));
+        setView("list");
+      }
       function addCase() { const nc=emptyCase(); setCases(prev=>[nc,...prev]); setSelectedId(nc.id); setView("detail"); }
+      function addMeeting(data) { setMeetings(prev=>[...prev, {id:String(Date.now()), ...data}]); }
+      function deleteMeeting(id) { setMeetings(prev=>prev.filter(m=>m.id!==id)); }
 
       if (loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#64748b"}}><div style={{fontSize:32,marginBottom:8}}>🚢</div><div>読み込み中…</div></div></div>;
-      if (view==="dataio")  return <DataIO cases={cases} clients={clients} onImport={(c,cl)=>{setCases(c);setClients(cl);}} onClose={()=>setView("list")} />;
-      if (view==="clients") return <ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} />;
-      if (view==="detail"&&selected) return <CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} />;
+
+      const conflictModal = conflict && <ConflictModal
+        onReload={async ()=>{ setConflict(false); await reloadFromServer(); }}
+        onForceSave={async ()=>{ setConflict(false); await doSave(true); }}
+      />;
+
+      if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} onImport={(c,cl,mt)=>{setCases(c);setClients(cl);setMeetings(mt||[]);}} onClose={()=>setView("list")} /></>;
+      if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} meetings={meetings} cases={cases} /></>;
+      if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} /></>;
 
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9"}}>
@@ -493,6 +649,7 @@
             </div>
           } />
           <SaveIndicator state={saveState} />
+          {conflictModal}
           <div style={{display:"flex",background:"#0f2744",padding:"0 16px 12px"}}>
             {[{label:"全案件",value:cases.length},{label:"進行中",value:activeCount},{label:"今月受注",value:cases.filter(c=>c.status==="ordered"&&c.inquiryDate?.startsWith(new Date().toISOString().slice(0,7))).length}].map((s,i)=>(
               <div key={i} style={{flex:1,textAlign:"center",color:"#fff"}}>
