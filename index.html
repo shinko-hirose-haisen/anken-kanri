@@ -27,12 +27,12 @@
     const SAVE_MS = 2000;
 
     async function sbLoad() {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients,meetings,updated_at`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=cases,clients,meetings,reminders,updated_at`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
       if (!res.ok) throw new Error(`load error ${res.status}`);
       const rows = await res.json();
-      return rows[0] || { cases: [], clients: [], meetings: [], updated_at: null };
+      return rows[0] || { cases: [], clients: [], meetings: [], reminders: [], updated_at: null };
     }
     async function sbCheckUpdatedAt() {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main&select=updated_at`, {
@@ -51,7 +51,7 @@
       if (isNaN(ta) || isNaN(tb)) return a === b;
       return ta === tb;
     }
-    async function sbSave(cases, clients, meetings) {
+    async function sbSave(cases, clients, meetings, reminders) {
       const nowIso = new Date().toISOString();
       const res = await fetch(`${SUPABASE_URL}/rest/v1/haisen_data?id=eq.main`, {
         method: "PATCH",
@@ -59,7 +59,7 @@
           apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
           "Content-Type": "application/json", Prefer: "return=minimal"
         },
-        body: JSON.stringify({ cases, clients, meetings, updated_at: nowIso })
+        body: JSON.stringify({ cases, clients, meetings, reminders, updated_at: nowIso })
       });
       if (!res.ok) throw new Error(`save error ${res.status}`);
       return nowIso;
@@ -185,6 +185,86 @@
         </div>
       );
     }
+    // ─── リマインダー ──────────────────────────────────────────────
+    function reminderUrgency(r) {
+      if (r.done) return "done";
+      const today = dateStr();
+      if (!r.date || r.date > today) return "upcoming";
+      if (r.date === today) return "today";
+      return "overdue"; // 期限切れ
+    }
+    function ReminderBanner({ reminders, cases, onDone, onDelete }) {
+      const active = reminders.filter(r=>!r.done);
+      if (active.length === 0) return null;
+      const today = dateStr();
+      const urgent = active.filter(r=>r.date && r.date <= today);
+      const upcoming = active.filter(r=>!r.date || r.date > today);
+      const urgencyColor = { overdue:"#fee2e2", today:"#fef9ec" };
+      const urgencyText = { overdue:"⚠️ 期限切れ", today:"📅 今日" };
+      const all = [
+        ...urgent.sort((a,b)=>a.date.localeCompare(b.date)),
+        ...upcoming.sort((a,b)=>(a.date||"9").localeCompare(b.date||"9"))
+      ];
+      return (
+        <div style={{margin:"12px 16px 0"}}>
+          {all.map(r => {
+            const urg = reminderUrgency(r);
+            const cs = cases.find(c=>String(c.id)===String(r.caseId));
+            const bg = urg==="overdue"?"#fee2e2":urg==="today"?"#fef9ec":"#f0f9ff";
+            const border = urg==="overdue"?"#fca5a5":urg==="today"?"#fcd34d":"#bae6fd";
+            const label = urg==="overdue"?"⚠️ 期限切れ":urg==="today"?"📅 今日":r.date?`📌 ${r.date}`:"📌";
+            return (
+              <div key={r.id} style={{background:bg,border:`1px solid ${border}`,borderRadius:10,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"flex-start",gap:8}}>
+                <button onClick={()=>onDone(r.id)} title="完了にする" style={{flexShrink:0,width:20,height:20,borderRadius:"50%",border:`2px solid ${urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#38bdf8"}`,background:"#fff",cursor:"pointer",marginTop:1}} />
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,color:"#1e293b",fontWeight:600}}>{r.content}</div>
+                  <div style={{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}}>
+                    <span style={{fontSize:11,color: urg==="overdue"?"#dc2626":urg==="today"?"#b45309":"#0369a1",fontWeight:700}}>{label}</span>
+                    {cs && <span style={{fontSize:11,color:"#64748b",background:"#e2e8f0",padding:"1px 7px",borderRadius:6}}>{cs.title||"件名未入力"}</span>}
+                  </div>
+                </div>
+                <button onClick={()=>onDelete(r.id)} style={{flexShrink:0,background:"none",border:"none",color:"#cbd5e1",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    function ReminderAddForm({ cases, onAdd, onClose }) {
+      const [content, setContent] = useState("");
+      const [date, setDate] = useState("");
+      const [caseId, setCaseId] = useState("");
+      function submit() {
+        if (!content.trim()) return;
+        onAdd({ content: content.trim(), date, caseId });
+        onClose();
+      }
+      return (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:999,padding:"0 0 0"}}>
+          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:480,boxShadow:"0 -4px 24px #0002"}}>
+            <div style={{fontWeight:700,fontSize:15,color:"#0f2744",marginBottom:14}}>📝 やることを追加</div>
+            <textarea value={content} onChange={e=>setContent(e.target.value)} rows={2} placeholder="例：〇〇社に見積もり送る" style={{...S.input,resize:"none",marginBottom:10,fontSize:14}} autoFocus />
+            <div style={{display:"flex",gap:8,marginBottom:14}}>
+              <div style={{flex:1}}>
+                <label style={S.label}>期日（任意）</label>
+                <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{...S.input,fontSize:13}} />
+              </div>
+              <div style={{flex:2}}>
+                <label style={S.label}>関連案件（任意）</label>
+                <select value={caseId} onChange={e=>setCaseId(e.target.value)} style={{...S.input,fontSize:13}}>
+                  <option value="">なし</option>
+                  {cases.filter(c=>!["completed","lost"].includes(c.status)).map(c=><option key={c.id} value={c.id}>{c.title||"件名未入力"}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={onClose} style={{...S.btn("#e8edf3","#0f2744"),flex:1}}>キャンセル</button>
+              <button onClick={submit} disabled={!content.trim()} style={{...S.btn("#0f2744"),flex:2,opacity:content.trim()?1:0.5}}>追加</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
     function ConflictModal({ onReload, onForceSave }) {
       return (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
@@ -208,7 +288,7 @@
       const [error, setError] = useState("");
       function check() {
         if (pw === APP_PASSWORD) {
-          sessionStorage.setItem("anken_unlocked", "1");
+          localStorage.setItem("anken_unlocked", "1");
           onUnlock();
         } else {
           setError("パスワードが違います");
@@ -479,18 +559,18 @@
       );
     }
 
-    function DataIO({ cases, clients, meetings, onImport, onClose }) {
+    function DataIO({ cases, clients, meetings, reminders, onImport, onClose }) {
       const [importText, setImportText] = useState("");
       const [msg, setMsg] = useState("");
       function doExport() {
-        const data = JSON.stringify({ cases, clients, meetings }, null, 2);
+        const data = JSON.stringify({ cases, clients, meetings, reminders }, null, 2);
         navigator.clipboard.writeText(data).then(()=>setMsg("✓ クリップボードにコピーしました")).catch(()=>setMsg("コピー失敗。下のテキストを手動でコピーしてください"));
       }
       function doImport() {
         try {
           const parsed = JSON.parse(importText);
           if (!Array.isArray(parsed.cases)||!Array.isArray(parsed.clients)) throw new Error();
-          onImport(parsed.cases, parsed.clients, Array.isArray(parsed.meetings)?parsed.meetings:[]);
+          onImport(parsed.cases, parsed.clients, Array.isArray(parsed.meetings)?parsed.meetings:[], Array.isArray(parsed.reminders)?parsed.reminders:[]);
           setMsg("✓ 取り込み完了！");
           setImportText("");
         } catch { setMsg("エラー：正しいデータではありません"); }
@@ -502,11 +582,11 @@
             <div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 3px #0001"}}>
               <div style={{fontWeight:700,color:"#0f2744",marginBottom:8}}>📤 データを書き出す</div>
               <button onClick={doExport} style={{...S.btn("#0f2744"),width:"100%",marginBottom:10}}>クリップボードにコピー</button>
-              <textarea readOnly value={JSON.stringify({cases,clients,meetings},null,2)} rows={6} style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical"}} onClick={e=>e.target.select()} />
+              <textarea readOnly value={JSON.stringify({cases,clients,meetings,reminders},null,2)} rows={6} style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical"}} onClick={e=>e.target.select()} />
             </div>
             <div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 3px #0001"}}>
               <div style={{fontWeight:700,color:"#0f2744",marginBottom:8}}>📥 データを取り込む</div>
-              <textarea value={importText} onChange={e=>setImportText(e.target.value)} rows={6} placeholder='{"cases":[...],"clients":[...],"meetings":[...]} の形式で貼り付け' style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical",marginBottom:10}} />
+              <textarea value={importText} onChange={e=>setImportText(e.target.value)} rows={6} placeholder='{"cases":[...],"clients":[...],"meetings":[...],"reminders":[...]} の形式で貼り付け' style={{...S.input,fontSize:11,fontFamily:"monospace",resize:"vertical",marginBottom:10}} />
               <button onClick={doImport} style={{...S.btn("#15803d"),width:"100%"}} disabled={!importText.trim()}>取り込む</button>
             </div>
             {msg && <div style={{background:msg.startsWith("✓")?"#f0fdf4":"#fee2e2",borderRadius:8,padding:"10px 14px",fontSize:13,color:msg.startsWith("✓")?"#15803d":"#dc2626",fontWeight:600}}>{msg}</div>}
@@ -516,11 +596,13 @@
     }
 
     function App() {
-      const [unlocked, setUnlocked] = useState(!!sessionStorage.getItem("anken_unlocked"));
+      const [unlocked, setUnlocked] = useState(!!localStorage.getItem("anken_unlocked"));
       const [cases,   setCases]   = useState([]);
       const [clients, setClients] = useState([]);
       const [meetings, setMeetings] = useState([]);
+      const [reminders, setReminders] = useState([]);
       const [loading, setLoading] = useState(true);
+      const [showReminderForm, setShowReminderForm] = useState(false);
       const [saveState, setSaveState] = useState("idle");
       const [view,       setView]       = useState("list");
       const [selectedId, setSelectedId] = useState(null);
@@ -542,6 +624,7 @@
           if (data.cases)    setCases(data.cases);
           if (data.clients)  setClients(data.clients);
           setMeetings(data.meetings||[]);
+          setReminders(data.reminders||[]);
           lastKnownUpdatedAt.current = data.updated_at || null;
         } catch(e) { console.error(e); }
       }
@@ -588,7 +671,7 @@
               return;
             }
           }
-          const nowIso = await sbSave(cases, clients, meetings);
+          const nowIso = await sbSave(cases, clients, meetings, reminders);
           lastKnownUpdatedAt.current = nowIso;
           isEditing.current = false;
           setSaveState("saved");
@@ -596,7 +679,7 @@
         } catch(e) {
           console.error(e);
           setSaveState("error");
-          retryTimer.current = setTimeout(()=>doSave(force), 10000); // 10秒後に自動リトライ
+          retryTimer.current = setTimeout(()=>doSave(force), 10000);
         }
       }
 
@@ -606,7 +689,7 @@
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => doSave(false), SAVE_MS);
         return () => clearTimeout(saveTimer.current);
-      }, [cases, clients, meetings]);
+      }, [cases, clients, meetings, reminders]);
 
       if (!unlocked) return <PasswordScreen onUnlock={()=>setUnlocked(true)} />;
 
@@ -639,6 +722,9 @@
       function addCase() { const nc=emptyCase(); setCases(prev=>[nc,...prev]); setSelectedId(nc.id); setView("detail"); }
       function addMeeting(data) { setMeetings(prev=>[...prev, {id:String(Date.now()), ...data}]); }
       function deleteMeeting(id) { setMeetings(prev=>prev.filter(m=>m.id!==id)); }
+      function addReminder(data) { setReminders(prev=>[...prev, {id:String(Date.now()), done:false, ...data}]); }
+      function doneReminder(id) { setReminders(prev=>prev.map(r=>r.id===id?{...r,done:true}:r)); }
+      function deleteReminder(id) { setReminders(prev=>prev.filter(r=>r.id!==id)); }
 
       if (loading) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f1f5f9"}}><div style={{textAlign:"center",color:"#64748b"}}><div style={{fontSize:32,marginBottom:8}}>🚢</div><div>読み込み中…</div></div></div>;
 
@@ -647,7 +733,7 @@
         onForceSave={async ()=>{ setConflict(false); await doSave(true); }}
       />;
 
-      if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} onImport={(c,cl,mt)=>{setCases(c);setClients(cl);setMeetings(mt||[]);}} onClose={()=>setView("list")} /></>;
+      if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} reminders={reminders} onImport={(c,cl,mt,rd)=>{setCases(c);setClients(cl);setMeetings(mt||[]);setReminders(rd||[]);}} onClose={()=>setView("list")} /></>;
       if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} meetings={meetings} cases={cases} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} /></>;
       if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} /></>;
 
@@ -657,7 +743,7 @@
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
               <button onClick={()=>setView("dataio")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>引き継ぎ</button>
               <button onClick={()=>setView("clients")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>顧客管理</button>
-              <button onClick={()=>{sessionStorage.removeItem("anken_unlocked");setUnlocked(false);}} style={{background:"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.7)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"5px 11px",fontSize:11,cursor:"pointer"}}>ロック</button>
+              <button onClick={()=>{localStorage.removeItem("anken_unlocked");setUnlocked(false);}} style={{background:"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.7)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"5px 11px",fontSize:11,cursor:"pointer"}}>ロック</button>
             </div>
           } />
           <SaveIndicator state={saveState} />
@@ -674,6 +760,8 @@
             <div style={{fontWeight:700,color:"#92400e",fontSize:13}}>⚠️ 下見積もり未入力 {alertCases.length}件</div>
             {alertCases.map(c=><div key={c.id} onClick={()=>{setSelectedId(c.id);setView("detail");}} style={{fontSize:12,color:"#b45309",marginTop:3,cursor:"pointer"}}>→ {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>)}
           </div>}
+          <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} />
+          {showReminderForm && <ReminderAddForm cases={cases} onAdd={addReminder} onClose={()=>setShowReminderForm(false)} />}
           <div style={{padding:"12px 16px 0"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 依頼元・件名で検索…" style={S.input} /></div>
           <div style={{padding:"8px 16px 0",display:"flex",gap:6}}>
             <select value={filterYear} onChange={e=>setFilterYear(e.target.value)} style={{...S.input,flex:1,padding:"7px 8px",fontSize:13}}>
@@ -703,6 +791,7 @@
             {sorted.map(c=><CaseCard key={c.id} c={c} onClick={()=>{setSelectedId(c.id);setView("detail");}} clients={clients} />)}
           </div>
           <button onClick={addCase} style={{position:"fixed",bottom:24,right:20,width:58,height:58,borderRadius:"50%",background:"#0f2744",color:"#fff",fontSize:30,border:"none",boxShadow:"0 4px 16px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>＋</button>
+          <button onClick={()=>setShowReminderForm(true)} title="やることを追加" style={{position:"fixed",bottom:24,right:90,width:48,height:48,borderRadius:"50%",background:"#f59e0b",color:"#fff",fontSize:22,border:"none",boxShadow:"0 4px 12px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>📝</button>
         </div>
       );
     }
