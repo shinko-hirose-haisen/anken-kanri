@@ -193,7 +193,7 @@
       if (r.date === today) return "today";
       return "overdue"; // 期限切れ
     }
-    function ReminderBanner({ reminders, cases, onDone, onDelete }) {
+    function ReminderBanner({ reminders, cases, onDone, onDelete, onEdit }) {
       const active = reminders.filter(r=>!r.done);
       if (active.length === 0) return null;
       const today = dateStr();
@@ -204,49 +204,48 @@
         ...upcoming.sort((a,b)=>(a.date||"9").localeCompare(b.date||"9"))
       ];
       return (
-        <div style={{margin:"12px 16px 0",borderRadius:10,overflow:"hidden",border:"1px solid #e2e8f0"}}>
-          {all.map((r, idx) => {
+        <div style={{margin:"12px 16px 0",display:"flex",flexDirection:"column",gap:6}}>
+          {all.map((r) => {
             const urg = reminderUrgency(r);
             const cs = cases.find(c=>String(c.id)===String(r.caseId));
-            const isLast = idx === all.length - 1;
-            const bg = urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#fff";
-            const textColor = urg==="overdue"||urg==="today" ? "#fff" : "#1e293b";
-            const subColor = urg==="overdue"?"#fecaca":urg==="today"?"#fef3c7":"#94a3b8";
+            const barColor = urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#94a3b8";
+            const bg = urg==="overdue"?"#fef2f2":urg==="today"?"#fffbeb":"#fff";
+            const titleColor = urg==="overdue"?"#7f1d1d":urg==="today"?"#713f12":"#1e293b";
+            const subColor = urg==="overdue"?"#dc2626":urg==="today"?"#b45309":"#94a3b8";
             const icon = urg==="overdue"?"⚠️":urg==="today"?"⏰":"📌";
             const dateLabel = urg==="overdue"?`期限切れ ${r.date}`:urg==="today"?"今日":r.date||"";
-            const btnStyle = urg==="overdue"||urg==="today"
-              ? {background:"rgba(255,255,255,0.25)",border:"1px solid rgba(255,255,255,0.4)",color:"#fff"}
-              : {background:"#f1f5f9",border:"1px solid #cbd5e1",color:"#475569"};
-            const delColor = urg==="overdue"||urg==="today" ? "rgba(255,255,255,0.7)" : "#94a3b8";
             return (
-              <div key={r.id} style={{background:bg,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,borderBottom:isLast?"none":(urg==="overdue"||urg==="today"?"1px solid rgba(255,255,255,0.15)":"1px solid #f1f5f9")}}>
+              <div key={r.id} onClick={()=>onEdit(r)} style={{background:bg,border:"1px solid #e2e8f0",borderLeft:`6px solid ${barColor}`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                 <span style={{fontSize:15,flexShrink:0}}>{icon}</span>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:600,color:textColor,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.content}</div>
-                  {cs && <div style={{fontSize:10,color:subColor,marginTop:1}}>{cs.title||"件名未入力"}</div>}
+                  <div style={{fontSize:13,fontWeight:600,color:titleColor,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.content}</div>
+                  <div style={{display:"flex",gap:6,marginTop:2}}>
+                    {dateLabel && <span style={{fontSize:11,color:subColor,fontWeight:600}}>{dateLabel}</span>}
+                    {cs && <span style={{fontSize:10,color:"#94a3b8"}}>{cs.title||"件名未入力"}</span>}
+                  </div>
                 </div>
-                <span style={{fontSize:11,color:subColor,whiteSpace:"nowrap",flexShrink:0}}>{dateLabel}</span>
-                <button onClick={()=>onDone(r.id)} style={{flexShrink:0,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600,...btnStyle}}>完了</button>
-                <button onClick={()=>onDelete(r.id)} style={{flexShrink:0,background:"none",border:"none",color:delColor,fontSize:13,cursor:"pointer",padding:"0 2px"}}>✕</button>
+                <button onClick={e=>{e.stopPropagation();onDone(r.id);}} style={{flexShrink:0,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600,background:"#f1f5f9",border:"1px solid #cbd5e1",color:"#475569"}}>完了</button>
+                <button onClick={e=>{e.stopPropagation();onDelete(r.id);}} style={{flexShrink:0,background:"none",border:"none",color:"#94a3b8",fontSize:13,cursor:"pointer",padding:"0 2px"}}>✕</button>
               </div>
             );
           })}
         </div>
       );
     }
-    function ReminderAddForm({ cases, onAdd, onClose }) {
-      const [content, setContent] = useState("");
-      const [date, setDate] = useState("");
-      const [caseId, setCaseId] = useState("");
+    function ReminderAddForm({ cases, initial, onSave, onClose }) {
+      const [content, setContent] = useState(initial?.content||"");
+      const [date, setDate] = useState(initial?.date||"");
+      const [caseId, setCaseId] = useState(initial?.caseId||"");
+      const isEdit = !!initial;
       function submit() {
         if (!content.trim()) return;
-        onAdd({ content: content.trim(), date, caseId });
+        onSave({ content: content.trim(), date, caseId });
         onClose();
       }
       return (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:999,padding:"0 0 0"}}>
           <div style={{background:"#fff",borderRadius:"16px 16px 0 0",padding:"20px 16px 32px",width:"100%",maxWidth:480,boxShadow:"0 -4px 24px #0002"}}>
-            <div style={{fontWeight:700,fontSize:15,color:"#0f2744",marginBottom:14}}>📝 やることを追加</div>
+            <div style={{fontWeight:700,fontSize:15,color:"#0f2744",marginBottom:14}}>📝 {isEdit?"やることを編集":"やることを追加"}</div>
             <textarea value={content} onChange={e=>setContent(e.target.value)} rows={2} placeholder="例：〇〇社に見積もり送る" style={{...S.input,resize:"none",marginBottom:10,fontSize:14}} autoFocus />
             <div style={{display:"flex",gap:8,marginBottom:14}}>
               <div style={{flex:1}}>
@@ -263,7 +262,7 @@
             </div>
             <div style={{display:"flex",gap:8}}>
               <button onClick={onClose} style={{...S.btn("#e8edf3","#0f2744"),flex:1}}>キャンセル</button>
-              <button onClick={submit} disabled={!content.trim()} style={{...S.btn("#0f2744"),flex:2,opacity:content.trim()?1:0.5}}>追加</button>
+              <button onClick={submit} disabled={!content.trim()} style={{...S.btn("#0f2744"),flex:2,opacity:content.trim()?1:0.5}}>{isEdit?"保存":"追加"}</button>
             </div>
           </div>
         </div>
@@ -607,6 +606,7 @@
       const [reminders, setReminders] = useState([]);
       const [loading, setLoading] = useState(true);
       const [showReminderForm, setShowReminderForm] = useState(false);
+      const [editingReminder, setEditingReminder] = useState(null);
       const [saveState, setSaveState] = useState("idle");
       const [view,       setView]       = useState("list");
       const [selectedId, setSelectedId] = useState(null);
@@ -727,6 +727,7 @@
       function addMeeting(data) { setMeetings(prev=>[...prev, {id:String(Date.now()), ...data}]); }
       function deleteMeeting(id) { setMeetings(prev=>prev.filter(m=>m.id!==id)); }
       function addReminder(data) { setReminders(prev=>[...prev, {id:String(Date.now()), done:false, ...data}]); }
+      function updateReminder(id, data) { setReminders(prev=>prev.map(r=>r.id===id?{...r,...data}:r)); }
       function doneReminder(id) { setReminders(prev=>prev.map(r=>r.id===id?{...r,done:true}:r)); }
       function deleteReminder(id) { setReminders(prev=>prev.filter(r=>r.id!==id)); }
 
@@ -764,8 +765,9 @@
             <div style={{fontWeight:700,color:"#92400e",fontSize:13}}>⚠️ 下見積もり未入力 {alertCases.length}件</div>
             {alertCases.map(c=><div key={c.id} onClick={()=>{setSelectedId(c.id);setView("detail");}} style={{fontSize:12,color:"#b45309",marginTop:3,cursor:"pointer"}}>→ {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>)}
           </div>}
-          <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} />
-          {showReminderForm && <ReminderAddForm cases={cases} onAdd={addReminder} onClose={()=>setShowReminderForm(false)} />}
+          <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} onEdit={setEditingReminder} />
+          {showReminderForm && <ReminderAddForm cases={cases} onSave={addReminder} onClose={()=>setShowReminderForm(false)} />}
+          {editingReminder && <ReminderAddForm cases={cases} initial={editingReminder} onSave={data=>updateReminder(editingReminder.id, data)} onClose={()=>setEditingReminder(null)} />}
           <div style={{padding:"12px 16px 0"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 依頼元・件名で検索…" style={S.input} /></div>
           <div style={{padding:"8px 16px 0",display:"flex",gap:6}}>
             <select value={filterYear} onChange={e=>setFilterYear(e.target.value)} style={{...S.input,flex:1,padding:"7px 8px",fontSize:13}}>
