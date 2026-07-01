@@ -199,31 +199,35 @@
       const today = dateStr();
       const urgent = active.filter(r=>r.date && r.date <= today);
       const upcoming = active.filter(r=>!r.date || r.date > today);
-      const urgencyColor = { overdue:"#fee2e2", today:"#fef9ec" };
-      const urgencyText = { overdue:"⚠️ 期限切れ", today:"📅 今日" };
       const all = [
         ...urgent.sort((a,b)=>a.date.localeCompare(b.date)),
         ...upcoming.sort((a,b)=>(a.date||"9").localeCompare(b.date||"9"))
       ];
       return (
-        <div style={{margin:"12px 16px 0"}}>
-          {all.map(r => {
+        <div style={{margin:"12px 16px 0",borderRadius:10,overflow:"hidden",border:"1px solid #e2e8f0"}}>
+          {all.map((r, idx) => {
             const urg = reminderUrgency(r);
             const cs = cases.find(c=>String(c.id)===String(r.caseId));
-            const bg = urg==="overdue"?"#fee2e2":urg==="today"?"#fef9ec":"#f0f9ff";
-            const border = urg==="overdue"?"#fca5a5":urg==="today"?"#fcd34d":"#bae6fd";
-            const label = urg==="overdue"?"⚠️ 期限切れ":urg==="today"?"📅 今日":r.date?`📌 ${r.date}`:"📌";
+            const isLast = idx === all.length - 1;
+            const bg = urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#fff";
+            const textColor = urg==="overdue"||urg==="today" ? "#fff" : "#1e293b";
+            const subColor = urg==="overdue"?"#fecaca":urg==="today"?"#fef3c7":"#94a3b8";
+            const icon = urg==="overdue"?"⚠️":urg==="today"?"⏰":"📌";
+            const dateLabel = urg==="overdue"?`期限切れ ${r.date}`:urg==="today"?"今日":r.date||"";
+            const btnStyle = urg==="overdue"||urg==="today"
+              ? {background:"rgba(255,255,255,0.25)",border:"1px solid rgba(255,255,255,0.4)",color:"#fff"}
+              : {background:"#f1f5f9",border:"1px solid #cbd5e1",color:"#475569"};
+            const delColor = urg==="overdue"||urg==="today" ? "rgba(255,255,255,0.7)" : "#94a3b8";
             return (
-              <div key={r.id} style={{background:bg,border:`1px solid ${border}`,borderRadius:10,padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"flex-start",gap:8}}>
-                <button onClick={()=>onDone(r.id)} title="完了にする" style={{flexShrink:0,width:20,height:20,borderRadius:"50%",border:`2px solid ${urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#38bdf8"}`,background:"#fff",cursor:"pointer",marginTop:1}} />
+              <div key={r.id} style={{background:bg,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,borderBottom:isLast?"none":(urg==="overdue"||urg==="today"?"1px solid rgba(255,255,255,0.15)":"1px solid #f1f5f9")}}>
+                <span style={{fontSize:15,flexShrink:0}}>{icon}</span>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,color:"#1e293b",fontWeight:600}}>{r.content}</div>
-                  <div style={{display:"flex",gap:6,marginTop:3,flexWrap:"wrap"}}>
-                    <span style={{fontSize:11,color: urg==="overdue"?"#dc2626":urg==="today"?"#b45309":"#0369a1",fontWeight:700}}>{label}</span>
-                    {cs && <span style={{fontSize:11,color:"#64748b",background:"#e2e8f0",padding:"1px 7px",borderRadius:6}}>{cs.title||"件名未入力"}</span>}
-                  </div>
+                  <div style={{fontSize:13,fontWeight:600,color:textColor,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.content}</div>
+                  {cs && <div style={{fontSize:10,color:subColor,marginTop:1}}>{cs.title||"件名未入力"}</div>}
                 </div>
-                <button onClick={()=>onDelete(r.id)} style={{flexShrink:0,background:"none",border:"none",color:"#cbd5e1",fontSize:14,cursor:"pointer",padding:"0 2px"}}>✕</button>
+                <span style={{fontSize:11,color:subColor,whiteSpace:"nowrap",flexShrink:0}}>{dateLabel}</span>
+                <button onClick={()=>onDone(r.id)} style={{flexShrink:0,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600,...btnStyle}}>完了</button>
+                <button onClick={()=>onDelete(r.id)} style={{flexShrink:0,background:"none",border:"none",color:delColor,fontSize:13,cursor:"pointer",padding:"0 2px"}}>✕</button>
               </div>
             );
           })}
