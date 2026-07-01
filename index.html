@@ -189,31 +189,29 @@
     function reminderUrgency(r) {
       if (r.done) return "done";
       const today = dateStr();
-      if (!r.date || r.date > today) return "upcoming";
-      if (r.date === today) return "today";
-      return "overdue"; // 期限切れ
+      if (!r.date) return "upcoming";
+      if (r.date < today) return "overdue"; // 期限切れ
+      const oneWeekLater = new Date();
+      oneWeekLater.setDate(oneWeekLater.getDate() + 7);
+      const weekLaterStr = oneWeekLater.toISOString().slice(0,10);
+      if (r.date <= weekLaterStr) return "soon"; // 1週間以内
+      return "upcoming";
     }
     function ReminderBanner({ reminders, cases, onDone, onDelete, onEdit }) {
       const active = reminders.filter(r=>!r.done);
       if (active.length === 0) return null;
-      const today = dateStr();
-      const urgent = active.filter(r=>r.date && r.date <= today);
-      const upcoming = active.filter(r=>!r.date || r.date > today);
-      const all = [
-        ...urgent.sort((a,b)=>a.date.localeCompare(b.date)),
-        ...upcoming.sort((a,b)=>(a.date||"9").localeCompare(b.date||"9"))
-      ];
+      const all = [...active].sort((a,b)=>(a.date||"9999").localeCompare(b.date||"9999"));
       return (
         <div style={{margin:"12px 16px 0",display:"flex",flexDirection:"column",gap:6}}>
           {all.map((r) => {
             const urg = reminderUrgency(r);
             const cs = cases.find(c=>String(c.id)===String(r.caseId));
-            const barColor = urg==="overdue"?"#ef4444":urg==="today"?"#f59e0b":"#94a3b8";
-            const bg = urg==="overdue"?"#fef2f2":urg==="today"?"#fffbeb":"#fff";
-            const titleColor = urg==="overdue"?"#7f1d1d":urg==="today"?"#713f12":"#1e293b";
-            const subColor = urg==="overdue"?"#dc2626":urg==="today"?"#b45309":"#94a3b8";
-            const icon = urg==="overdue"?"⚠️":urg==="today"?"⏰":"📌";
-            const dateLabel = urg==="overdue"?`期限切れ ${r.date}`:urg==="today"?"今日":r.date||"";
+            const barColor = urg==="overdue"?"#ef4444":urg==="soon"?"#f59e0b":"#94a3b8";
+            const bg = urg==="overdue"?"#fef2f2":urg==="soon"?"#fffbeb":"#fff";
+            const titleColor = urg==="overdue"?"#7f1d1d":urg==="soon"?"#713f12":"#1e293b";
+            const subColor = urg==="overdue"?"#dc2626":urg==="soon"?"#b45309":"#94a3b8";
+            const icon = urg==="overdue"?"⚠️":urg==="soon"?"⏰":"📌";
+            const dateLabel = urg==="overdue"?`期限切れ ${r.date}`:r.date||"";
             return (
               <div key={r.id} onClick={()=>onEdit(r)} style={{background:bg,border:"1px solid #e2e8f0",borderLeft:`6px solid ${barColor}`,borderRadius:8,padding:"10px 12px",display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                 <span style={{fontSize:15,flexShrink:0}}>{icon}</span>
