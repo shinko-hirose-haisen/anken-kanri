@@ -1,0 +1,21 @@
+# Supabase自動休止防止（毎日1回アクセスするだけの仕組み）
+# 配置場所: リポジトリの .github/workflows/keep-alive.yml
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    # 毎日 日本時間 朝7時（UTC 22時）に実行
+    - cron: "0 22 * * *"
+  # 手動実行も可能にしておく（Actionsタブから実行できる）
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: |
+          curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+            "https://nktwovvkirfgclvcietq.supabase.co/rest/v1/haisen_data?id=eq.main&select=id" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}"
