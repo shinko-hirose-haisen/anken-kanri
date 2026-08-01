@@ -101,6 +101,14 @@
       if (c.workJun) s += JUN_LABELS[c.workJun]||"";
       return s||null;
     }
+    // 作業予定時期（年・月・旬）から目安の日付を推定する。旬=1→1日、2→11日、3→21日。
+    function estimateWorkDate(c) {
+      if (c.workUndecided || !c.workYear || !c.workMonth) return null;
+      const day = c.workJun==="2" ? 11 : c.workJun==="3" ? 21 : 1;
+      const d = new Date(Number(c.workYear), Number(c.workMonth)-1, day);
+      if (isNaN(d.getTime())) return null;
+      return d;
+    }
     function clientDisplayName(c, clients) {
       const cid = String(c.clientId||"");
       if (cid && cid !== "__manual__") {
@@ -272,6 +280,52 @@
         </div>
       );
     }
+    function StarredSection({ cases, clients, onClick }) {
+      const starred = cases.filter(c=>c.starred && !["completed","lost"].includes(c.status));
+      if (starred.length===0) return null;
+      return (
+        <div style={{margin:"12px 16px 0"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#b45309",marginBottom:6}}>⭐ スター付き案件（{starred.length}件）</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {starred.map(c=>(
+              <div key={c.id} onClick={()=>onClick(c.id)} style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:14,flexShrink:0}}>★</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#713f12",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>
+                  {fmtWorkTime(c) && <div style={{fontSize:11,color:"#b45309",marginTop:1}}>🗓 {fmtWorkTime(c)}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    function UpcomingWorkSection({ cases, clients, onClick }) {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const limit = new Date(today); limit.setDate(limit.getDate()+30);
+      const upcoming = cases
+        .filter(c=>!["completed","lost"].includes(c.status))
+        .map(c=>({ c, d: estimateWorkDate(c) }))
+        .filter(x=>x.d && x.d >= today && x.d <= limit)
+        .sort((a,b)=>a.d-b.d);
+      if (upcoming.length===0) return null;
+      return (
+        <div style={{margin:"12px 16px 0"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#0369a1",marginBottom:6}}>🗓 作業予定が1ヶ月以内（{upcoming.length}件）</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {upcoming.map(({c})=>(
+              <div key={c.id} onClick={()=>onClick(c.id)} style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:8,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:14,flexShrink:0}}>🗓</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#0c4a6e",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>
+                  <div style={{fontSize:11,color:"#0369a1",marginTop:1}}>{fmtWorkTime(c)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
     function ReminderAddForm({ cases, initial, onSave, onClose }) {
       const [content, setContent] = useState(initial?.content||"");
       const [date, setDate] = useState(initial?.date||"");
@@ -427,7 +481,12 @@
       const caseMeetings = (meetings||[]).filter(m=>String(m.caseId)===String(c.id));
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:48}}>
-          <TopBar title={clientDisplayName(c,clients)||"依頼元未入力"} onBack={onBack} right={<StatusBadge statusKey={c.status} />} />
+          <TopBar title={clientDisplayName(c,clients)||"依頼元未入力"} onBack={onBack} right={
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <button onClick={()=>onChange({...c,starred:!c.starred})} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,padding:0,lineHeight:1,color:c.starred?"#fbbf24":"rgba(255,255,255,0.4)"}}>{c.starred?"★":"☆"}</button>
+              <StatusBadge statusKey={c.status} />
+            </div>
+          } />
           <div style={{display:"flex",padding:"10px 16px 0",gap:3,overflowX:"auto"}}>{tabBtn("basic","基本情報")}{tabBtn("estimate","見積もり")}{tabBtn("meetings","打合せ記録")}{tabBtn("history","進捗履歴")}</div>
           <div style={{background:"#fff",padding:16,boxShadow:"0 1px 3px #0001"}}>
             {tabVal==="basic" && <>
@@ -506,16 +565,17 @@
       );
     }
 
-    function CaseCard({ c, onClick, clients }) {
+    function CaseCard({ c, onClick, onToggleStar, clients }) {
       const color = STATUS_LIST.find(s=>s.key===c.status)?.color||"#ccc";
       const needsAlert = c.shipType==="借り船（傭船）" && !["completed","lost"].includes(c.status) && !(c.subEstimates||[]).length;
       return (
-        <div onClick={onClick} style={{background:"#fff",borderRadius:12,padding:"13px 15px",marginBottom:9,boxShadow:"0 1px 4px #0001",cursor:"pointer",borderLeft:`4px solid ${color}`}}>
+        <div onClick={onClick} style={{background:"#fff",borderRadius:12,padding:"13px 15px",marginBottom:9,boxShadow:"0 1px 4px #0001",cursor:"pointer",borderLeft:`4px solid ${color}`,position:"relative"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
             <span style={{fontWeight:700,fontSize:15,color:"#1e293b",flex:1,marginRight:8}}>
               {clientDisplayName(c,clients)||"（依頼元未入力）"}
               {c.contactName && <span style={{fontWeight:400,fontSize:13,color:"#64748b"}}>　{c.contactName}</span>}
             </span>
+            <button onClick={e=>{e.stopPropagation();onToggleStar(c.id);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,padding:"0 4px",lineHeight:1,color:c.starred?"#f59e0b":"#e2e8f0"}}>{c.starred?"★":"☆"}</button>
             <StatusBadge statusKey={c.status} small />
           </div>
           <div style={{color:"#475569",fontSize:13,marginBottom:6}}>{c.title||"（件名未入力）"}</div>
@@ -758,6 +818,7 @@
       });
       const activeCount = cases.filter(c=>!["completed","lost"].includes(c.status)).length;
       function updateCase(u) { setCases(prev=>prev.map(c=>c.id===u.id?u:c)); }
+      function toggleStar(id) { setCases(prev=>prev.map(c=>c.id===id?{...c,starred:!c.starred}:c)); }
       function deleteCase(id) {
         setCases(prev=>prev.filter(c=>c.id!==id));
         setMeetings(prev=>prev.filter(m=>String(m.caseId)!==String(id)));
@@ -802,13 +863,15 @@
               </div>
             ))}
           </div>
+          <StarredSection cases={cases} clients={clients} onClick={id=>{setSelectedId(id);setView("detail");}} />
+          <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} onEdit={setEditingReminder} onUndone={undoneReminder} />
+          {showReminderForm && <ReminderAddForm cases={cases} onSave={addReminder} onClose={()=>setShowReminderForm(false)} />}
+          {editingReminder && <ReminderAddForm key={editingReminder.id} cases={cases} initial={editingReminder} onSave={data=>updateReminder(editingReminder.id, data)} onClose={()=>setEditingReminder(null)} />}
+          <UpcomingWorkSection cases={cases} clients={clients} onClick={id=>{setSelectedId(id);setView("detail");}} />
           {alertCases.length>0 && <div style={{background:"#fffbeb",borderLeft:"4px solid #f59e0b",margin:"12px 16px 0",borderRadius:8,padding:"10px 13px"}}>
             <div style={{fontWeight:700,color:"#92400e",fontSize:13}}>⚠️ 下見積もり未入力 {alertCases.length}件</div>
             {alertCases.map(c=><div key={c.id} onClick={()=>{setSelectedId(c.id);setView("detail");}} style={{fontSize:12,color:"#b45309",marginTop:3,cursor:"pointer"}}>→ {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>)}
           </div>}
-          <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} onEdit={setEditingReminder} onUndone={undoneReminder} />
-          {showReminderForm && <ReminderAddForm cases={cases} onSave={addReminder} onClose={()=>setShowReminderForm(false)} />}
-          {editingReminder && <ReminderAddForm key={editingReminder.id} cases={cases} initial={editingReminder} onSave={data=>updateReminder(editingReminder.id, data)} onClose={()=>setEditingReminder(null)} />}
           <div style={{padding:"12px 16px 0"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 依頼元・件名で検索…" style={S.input} /></div>
           <div style={{padding:"8px 16px 0",display:"flex",gap:6}}>
             <select value={filterYear} onChange={e=>setFilterYear(e.target.value)} style={{...S.input,flex:1,padding:"7px 8px",fontSize:13}}>
@@ -835,7 +898,7 @@
           </div>
           <div style={{padding:"12px 16px"}}>
             {sorted.length===0 && <div style={{textAlign:"center",color:"#94a3b8",padding:"50px 0"}}><div style={{fontSize:36,marginBottom:8}}>📋</div><div>{search||filterStatus!=="all"||filterYear||filterMonth?"該当する案件がありません":"案件を追加してください"}</div></div>}
-            {sorted.map(c=><CaseCard key={c.id} c={c} onClick={()=>{setSelectedId(c.id);setView("detail");}} clients={clients} />)}
+            {sorted.map(c=><CaseCard key={c.id} c={c} onClick={()=>{setSelectedId(c.id);setView("detail");}} onToggleStar={toggleStar} clients={clients} />)}
           </div>
           <button onClick={addCase} style={{position:"fixed",bottom:24,right:20,width:58,height:58,borderRadius:"50%",background:"#0f2744",color:"#fff",fontSize:30,border:"none",boxShadow:"0 4px 16px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>＋</button>
           <button onClick={()=>setShowReminderForm(true)} title="やることを追加" style={{position:"fixed",bottom:24,right:90,width:48,height:48,borderRadius:"50%",background:"#f59e0b",color:"#fff",fontSize:22,border:"none",boxShadow:"0 4px 12px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>📝</button>
