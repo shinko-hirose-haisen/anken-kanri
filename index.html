@@ -712,6 +712,7 @@
       const [selectedId, setSelectedId] = useState(null);
       const [filterStatus, setFilterStatus] = useState("all");
       const [showLost,     setShowLost]     = useState(false);
+      const [hideCompleted, setHideCompleted] = useState(false);
       const [sortOrder,    setSortOrder]    = useState("none");
       const [filterYear,   setFilterYear]   = useState("");
       const [filterMonth,  setFilterMonth]  = useState("");
@@ -805,6 +806,7 @@
       }
       const filtered = cases.filter(c => {
         if (filterStatus==="all" && c.status==="lost" && !showLost) return false;
+        if (filterStatus==="all" && c.status==="completed" && hideCompleted) return false;
         if (filterStatus!=="all"&&c.status!==filterStatus) return false;
         if (filterYear&&String(c.workYear)!==filterYear) return false;
         if (filterMonth&&String(c.workMonth)!==filterMonth) return false;
@@ -895,6 +897,7 @@
               <button key={s.key} onClick={()=>setFilterStatus(s.key)} style={{borderRadius:20,padding:"4px 12px",border:`1px solid ${filterStatus===s.key?s.color:"#cbd5e1"}`,background:filterStatus===s.key?s.color:"#fff",color:filterStatus===s.key?"#fff":s.color,fontSize:12,whiteSpace:"nowrap",cursor:"pointer",fontWeight:filterStatus===s.key?700:400}}>{s.label}</button>
             ))}
             <button onClick={()=>setShowLost(v=>!v)} style={{borderRadius:20,padding:"4px 12px",border:`1px solid ${showLost?"#dc2626":"#cbd5e1"}`,background:showLost?"#dc2626":"#fff",color:showLost?"#fff":"#dc2626",fontSize:12,whiteSpace:"nowrap",cursor:"pointer",fontWeight:showLost?700:400}}>失注</button>
+            <button onClick={()=>setHideCompleted(v=>!v)} style={{borderRadius:20,padding:"4px 12px",border:`1px solid ${hideCompleted?"#374151":"#cbd5e1"}`,background:hideCompleted?"#374151":"#fff",color:hideCompleted?"#fff":"#374151",fontSize:12,whiteSpace:"nowrap",cursor:"pointer",fontWeight:hideCompleted?700:400}}>完了を除く</button>
           </div>
           <div style={{padding:"12px 16px"}}>
             {sorted.length===0 && <div style={{textAlign:"center",color:"#94a3b8",padding:"50px 0"}}><div style={{fontSize:36,marginBottom:8}}>📋</div><div>{search||filterStatus!=="all"||filterYear||filterMonth?"該当する案件がありません":"案件を追加してください"}</div></div>}
