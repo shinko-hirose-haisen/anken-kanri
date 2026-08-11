@@ -143,6 +143,24 @@
         </div>
       );
     }
+    // 画面下部に固定表示する「保存して戻る」ボタン。押すと即座に保存し、
+    // 成功時のみ前の画面へ戻る。競合・失敗時はその場に留まりエラーを表示する。
+    function SaveBar({ onSaveAndBack }) {
+      const [busy, setBusy] = useState(false);
+      const [failed, setFailed] = useState(false);
+      async function handleClick() {
+        setBusy(true); setFailed(false);
+        const result = await onSaveAndBack();
+        setBusy(false);
+        if (result !== "saved") setFailed(true);
+      }
+      return (
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:"1px solid #e2e8f0",padding:"10px 16px",paddingBottom:"calc(10px + env(safe-area-inset-bottom))",boxShadow:"0 -2px 10px #0001",zIndex:60}}>
+          {failed && <div style={{fontSize:11,color:"#dc2626",textAlign:"center",marginBottom:6,fontWeight:600}}>保存できませんでした。もう一度お試しください</div>}
+          <button onClick={handleClick} disabled={busy} style={{...S.btn("#0f2744"),width:"100%",fontSize:15,padding:"12px",opacity:busy?0.7:1}}>{busy?"保存中…":"💾 保存して戻る"}</button>
+        </div>
+      );
+    }
     function SaveIndicator({ state }) {
       const map = { saving:"保存中…", saved:"✓ 保存済み", error:"保存失敗（再試行します）", conflict:"⚠ 他の人の更新を確認中…" };
       const col  = { saving:"#94a3b8", saved:"#22c55e", error:"#ef4444", conflict:"#b45309" };
@@ -458,7 +476,7 @@
       );
     }
 
-    function CaseDetail({ c, onChange, onBack, onDelete, clients, meetings, onAddMeeting, onDeleteMeeting, onAddReminder }) {
+    function CaseDetail({ c, onChange, onBack, onDelete, clients, meetings, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack }) {
       const [tabVal, setTabVal] = useState("basic");
       const [memoVal, setMemoVal] = useState("");
       function field(key, value) {
@@ -480,7 +498,7 @@
       const isBorrowed = c.shipType==="借り船（傭船）";
       const caseMeetings = (meetings||[]).filter(m=>String(m.caseId)===String(c.id));
       return (
-        <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:48}}>
+        <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:100}}>
           <TopBar title={clientDisplayName(c,clients)||"依頼元未入力"} onBack={onBack} right={
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <button onClick={()=>onChange({...c,starred:!c.starred})} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,padding:0,lineHeight:1,color:c.starred?"#fbbf24":"rgba(255,255,255,0.4)"}}>{c.starred?"★":"☆"}</button>
@@ -561,6 +579,7 @@
             </>}
           </div>
           <DeleteConfirm onDelete={()=>onDelete(c.id)} />
+          <SaveBar onSaveAndBack={()=>onSaveAndBack(onBack)} />
         </div>
       );
     }
@@ -645,10 +664,10 @@
         </div>
       );
     }
-    function ClientManager({ clients, onClose, onUpdate, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder }) {
+    function ClientManager({ clients, onClose, onUpdate, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack }) {
       const [name, setName] = useState("");
       return (
-        <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:40}}>
+        <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:90}}>
           <TopBar title="顧客・依頼元管理" onBack={onClose} />
           <div style={{padding:16}}>
             <div style={{background:"#fff",borderRadius:12,padding:16,marginBottom:14,boxShadow:"0 1px 3px #0001"}}>
@@ -658,6 +677,7 @@
             </div>
             {clients.map(cl=><ClientCard key={cl.id} cl={cl} onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))} onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))} meetings={meetings} cases={cases} onAddMeeting={onAddMeeting} onDeleteMeeting={onDeleteMeeting} onAddReminder={onAddReminder} />)}
           </div>
+          <SaveBar onSaveAndBack={()=>onSaveAndBack(onClose)} />
         </div>
       );
     }
@@ -773,7 +793,7 @@
               // 他端末が自分の最後の取得後に保存している → 競合
               setSaveState("idle");
               setConflict(true);
-              return;
+              return "conflict";
             }
           }
           const nowIso = await sbSave(cases, clients, meetings, reminders);
@@ -781,11 +801,21 @@
           isEditing.current = false;
           setSaveState("saved");
           setTimeout(()=>setSaveState("idle"), 2500);
+          return "saved";
         } catch(e) {
           console.error(e);
           setSaveState("error");
           retryTimer.current = setTimeout(()=>doSave(force), 10000);
+          return "error";
         }
+      }
+      // 「保存して戻る」ボタン用：待機中の自動保存タイマーを止めて即座に保存し、
+      // 成功したときだけ画面遷移する（競合・エラー時はその場に留まる）
+      async function saveNowThenBack(afterSave) {
+        clearTimeout(saveTimer.current);
+        const result = await doSave(false);
+        if (result === "saved") afterSave();
+        return result;
       }
 
       useEffect(() => {
@@ -843,8 +873,8 @@
       />;
 
       if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} reminders={reminders} onImport={(c,cl,mt,rd)=>{setCases(c);setClients(cl);setMeetings(mt||[]);setReminders(rd||[]);}} onClose={()=>setView("list")} /></>;
-      if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} meetings={meetings} cases={cases} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} /></>;
-      if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} /></>;
+      if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} meetings={meetings} cases={cases} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} /></>;
+      if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} /></>;
 
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9"}}>
