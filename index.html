@@ -742,10 +742,16 @@
       const retryTimer = useRef(null);
       const lastKnownUpdatedAt = useRef(null); // 自分が最後に取得/保存した時点のサーバー側updated_at
       const isEditing = useRef(false);         // 直近の編集操作からの猶予中かどうか
+      const inFlightSave = useRef(null);       // 保存処理が同時に複数走るのを防ぐ（自動保存とボタン保存の衝突対策）
+
+      // データ読み込み直後の1回だけ、自動保存の発火をスキップするためのフラグ。
+      // 読み込んだデータをそのまま無駄に保存し直してしまうのを防ぐ。
+      const skipNextAutosave = useRef(false);
 
       async function reloadFromServer() {
         try {
           const data = await sbLoad();
+          skipNextAutosave.current = true;
           if (data.cases)    setCases(data.cases);
           if (data.clients)  setClients(data.clients);
           setMeetings(data.meetings||[]);
@@ -784,30 +790,39 @@
       }, [unlocked, loading, conflict]);
 
       async function doSave(force) {
-        clearTimeout(retryTimer.current);
-        setSaveState("saving");
-        try {
-          if (!force) {
-            const serverUpdatedAt = await sbCheckUpdatedAt();
-            if (serverUpdatedAt && lastKnownUpdatedAt.current && !tsEqual(serverUpdatedAt, lastKnownUpdatedAt.current)) {
-              // 他端末が自分の最後の取得後に保存している → 競合
-              setSaveState("idle");
-              setConflict(true);
-              return "conflict";
+        // すでに保存処理が進行中なら、新しく別のリクエストを走らせず、
+        // 進行中の処理の完了を待ってその結果を使う（自動保存とボタン保存の同時実行を防止）
+        if (inFlightSave.current) return inFlightSave.current;
+        const p = (async () => {
+          clearTimeout(retryTimer.current);
+          setSaveState("saving");
+          try {
+            if (!force) {
+              const serverUpdatedAt = await sbCheckUpdatedAt();
+              if (serverUpdatedAt && lastKnownUpdatedAt.current && !tsEqual(serverUpdatedAt, lastKnownUpdatedAt.current)) {
+                // 他端末が自分の最後の取得後に保存している → 競合
+                setSaveState("idle");
+                setConflict(true);
+                return "conflict";
+              }
             }
+            const nowIso = await sbSave(cases, clients, meetings, reminders);
+            lastKnownUpdatedAt.current = nowIso;
+            isEditing.current = false;
+            setSaveState("saved");
+            setTimeout(()=>setSaveState("idle"), 2500);
+            return "saved";
+          } catch(e) {
+            console.error(e);
+            setSaveState("error");
+            retryTimer.current = setTimeout(()=>doSave(force), 10000);
+            return "error";
+          } finally {
+            inFlightSave.current = null;
           }
-          const nowIso = await sbSave(cases, clients, meetings, reminders);
-          lastKnownUpdatedAt.current = nowIso;
-          isEditing.current = false;
-          setSaveState("saved");
-          setTimeout(()=>setSaveState("idle"), 2500);
-          return "saved";
-        } catch(e) {
-          console.error(e);
-          setSaveState("error");
-          retryTimer.current = setTimeout(()=>doSave(force), 10000);
-          return "error";
-        }
+        })();
+        inFlightSave.current = p;
+        return p;
       }
       // 「保存して戻る」ボタン用：待機中の自動保存タイマーを止めて即座に保存し、
       // 成功したときだけ画面遷移する（競合・エラー時はその場に留まる）
@@ -820,6 +835,7 @@
 
       useEffect(() => {
         if (loading || !unlocked) return;
+        if (skipNextAutosave.current) { skipNextAutosave.current = false; return; }
         isEditing.current = true;
         clearTimeout(saveTimer.current);
         saveTimer.current = setTimeout(() => doSave(false), SAVE_MS);
