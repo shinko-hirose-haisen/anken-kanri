@@ -118,6 +118,28 @@
       return c.client||"";
     }
 
+    // 「YYYY-MM-DD」が今日から何日前かを表す文字列にする（端末のローカル日付基準）
+    function daysAgoLabel(ds) {
+      if (!ds) return "記録なし";
+      const p = String(ds).split("-").map(Number);
+      if (p.length < 3 || p.some(isNaN)) return String(ds);
+      const d = new Date(p[0], p[1]-1, p[2]);
+      const t = new Date(); t.setHours(0,0,0,0);
+      const n = Math.round((t - d) / 86400000);
+      if (n === 0) return "今日";
+      if (n < 0) return `${-n}日後`;
+      return `${n}日前`;
+    }
+    // 顧客に紐づく打合せ。clientIdが一致するもの＋顧客未選択だがその顧客の案件に紐づくもの。
+    function clientMeetingsOf(cl, meetings, cases) {
+      const id = String(cl.id);
+      const mine = new Set((cases||[]).filter(c=>String(c.clientId)===id).map(c=>String(c.id)));
+      return (meetings||[]).filter(m => String(m.clientId)===id || (!m.clientId && m.caseId && mine.has(String(m.caseId))));
+    }
+    function lastMeetingDate(list) {
+      return (list||[]).reduce((mx,m)=>(m.date && m.date>mx ? m.date : mx), "");
+    }
+
     const S = {
       label: { display:"block", fontSize:11, color:"#64748b", marginBottom:3, fontWeight:700 },
       input: { width:"100%", padding:"9px 11px", borderRadius:8, border:"1.5px solid #e2e8f0", fontSize:14, color:"#1e293b", background:"#f8fafc", boxSizing:"border-box" },
@@ -185,21 +207,22 @@
         </div>
       );
     }
-    function MeetingForm({ initialClientId, lockClient, clients, onAdd, onAddReminder }) {
+    function MeetingForm({ initialClientId, lockClient, clients, cases, onAdd, onAddReminder }) {
       const [clientId, setClientId] = useState(initialClientId||"");
       const [contactId, setContactId] = useState("");
       const [date, setDate] = useState(dateStr());
       const [content, setContent] = useState("");
       const [nextAction, setNextAction] = useState("");
       const [nextDate, setNextDate] = useState("");
+      const [caseId, setCaseId] = useState("");
       const contacts = clients.find(c=>String(c.id)===String(clientId))?.contacts||[];
       function submit() {
         if (!content.trim()) return;
-        onAdd({ date, clientId, contactId, content: content.trim() });
+        onAdd({ date, clientId, contactId, caseId, content: content.trim() });
         if (nextAction.trim() && onAddReminder) {
-          onAddReminder({ content: nextAction.trim(), date: nextDate });
+          onAddReminder({ content: nextAction.trim(), date: nextDate, caseId });
         }
-        setContent(""); setContactId(""); setNextAction(""); setNextDate("");
+        setContent(""); setContactId(""); setNextAction(""); setNextDate(""); setCaseId("");
       }
       return (
         <div style={{background:"#f8fafc",borderRadius:10,padding:"12px 12px 10px",marginBottom:14,border:"1px solid #e2e8f0"}}>
@@ -213,6 +236,10 @@
           {contacts.length>0 && <select value={contactId} onChange={e=>setContactId(e.target.value)} style={{...S.input,fontSize:13,padding:"7px 9px",marginBottom:8}}>
             <option value="">担当者（任意）</option>
             {contacts.map(ct=><option key={ct.id} value={ct.id}>{ct.name}</option>)}
+          </select>}
+          {cases && cases.length>0 && <select value={caseId} onChange={e=>setCaseId(e.target.value)} style={{...S.input,fontSize:13,padding:"7px 9px",marginBottom:8}}>
+            <option value="">関連案件なし（近況確認など）</option>
+            {cases.map(cs=><option key={cs.id} value={cs.id}>{cs.title||"件名未入力"}</option>)}
           </select>}
           <textarea value={content} onChange={e=>setContent(e.target.value)} rows={3} placeholder="打合せ内容を入力…" style={{...S.input,resize:"vertical",marginBottom:8}} />
           {onAddReminder && <div style={{background:"#fffbeb",border:"1px dashed #fcd34d",borderRadius:8,padding:"8px 10px",marginBottom:8}}>
@@ -476,7 +503,7 @@
       );
     }
 
-    function CaseDetail({ c, onChange, onBack, onDelete, clients, meetings, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack }) {
+    function CaseDetail({ c, onChange, onBack, onDelete, clients, meetings, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack, onOpenClient }) {
       const [tabVal, setTabVal] = useState("basic");
       const [memoVal, setMemoVal] = useState("");
       function field(key, value) {
@@ -496,6 +523,7 @@
         <button onClick={()=>setTabVal(t)} style={{ padding:"8px 14px", border:"none", borderRadius:"8px 8px 0 0", fontSize:13, cursor:"pointer", fontWeight:tabVal===t?700:400, background:tabVal===t?"#fff":"#e8edf3", color:tabVal===t?"#0f2744":"#64748b" }}>{label}</button>
       );
       const isBorrowed = c.shipType==="借り船（傭船）";
+      const linkedClient = (c.clientId && c.clientId!=="__manual__") ? clients.find(cl=>String(cl.id)===String(c.clientId)) : null;
       const caseMeetings = (meetings||[]).filter(m=>String(m.caseId)===String(c.id));
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:100}}>
@@ -509,6 +537,7 @@
           <div style={{background:"#fff",padding:16,boxShadow:"0 1px 3px #0001"}}>
             {tabVal==="basic" && <>
               <ClientSelector c={c} clients={clients} onChange={onChange} />
+              {linkedClient && onOpenClient && <button onClick={()=>onOpenClient(linkedClient.id)} style={{...S.btn("#e8edf3","#0f2744"),width:"100%",fontSize:13,marginBottom:14}}>👤 {linkedClient.name}の顧客ページを開く</button>}
               <Field label="件名" value={c.title} onChange={v=>field("title",v)} placeholder="例：富山港向け台船回航" />
               <Field label="打診日" type="date" value={c.inquiryDate} onChange={v=>field("inquiryDate",v)} />
               <div style={{marginBottom:14}}><label style={S.label}>ステータス</label><select value={c.status} onChange={e=>field("status",e.target.value)} style={S.input}>{STATUS_LIST.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}</select></div>
@@ -584,14 +613,17 @@
       );
     }
 
-    function CaseCard({ c, onClick, onToggleStar, clients }) {
+    function CaseCard({ c, onClick, onToggleStar, clients, onOpenClient }) {
       const color = STATUS_LIST.find(s=>s.key===c.status)?.color||"#ccc";
+      const cardClient = (c.clientId && c.clientId!=="__manual__") ? clients.find(cl=>String(cl.id)===String(c.clientId)) : null;
       const needsAlert = c.shipType==="借り船（傭船）" && !["completed","lost"].includes(c.status) && !(c.subEstimates||[]).length;
       return (
         <div onClick={onClick} style={{background:"#fff",borderRadius:12,padding:"13px 15px",marginBottom:9,boxShadow:"0 1px 4px #0001",cursor:"pointer",borderLeft:`4px solid ${color}`,position:"relative"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
             <span style={{fontWeight:700,fontSize:15,color:"#1e293b",flex:1,marginRight:8}}>
-              {clientDisplayName(c,clients)||"（依頼元未入力）"}
+              {cardClient && onOpenClient
+                ? <span onClick={e=>{e.stopPropagation();onOpenClient(cardClient.id);}} style={{borderBottom:"1px dotted #94a3b8"}}>{cardClient.name}</span>
+                : (clientDisplayName(c,clients)||"（依頼元未入力）")}
               {c.contactName && <span style={{fontWeight:400,fontSize:13,color:"#64748b"}}>　{c.contactName}</span>}
             </span>
             <button onClick={e=>{e.stopPropagation();onToggleStar(c.id);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,padding:"0 4px",lineHeight:1,color:c.starred?"#f59e0b":"#e2e8f0"}}>{c.starred?"★":"☆"}</button>
@@ -627,18 +659,23 @@
         </div>
       );
     }
-    function ClientCard({ cl, onUpdate, onDelete, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder }) {
+    function ClientCard({ cl, onUpdate, onDelete, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder, onOpenClient }) {
       const [open, setOpen] = useState(false);
       const contacts = cl.contacts||[];
-      const clientMeetings = (meetings||[]).filter(m=>String(m.clientId)===String(cl.id));
+      const clientMeetings = clientMeetingsOf(cl, meetings, cases);
+      const lastMeeting = lastMeetingDate(clientMeetings);
       return (
         <div style={{background:"#fff",borderRadius:12,marginBottom:10,boxShadow:"0 1px 3px #0001",overflow:"hidden"}}>
           <div onClick={()=>setOpen(o=>!o)} style={{padding:"13px 15px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
             <div>
               <div style={{fontWeight:700,color:"#1e293b"}}>{cl.name||"（名称未入力）"}</div>
               <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>担当者 {contacts.length}名{contacts.length>0 && "　"+contacts.map(ct=>ct.name||"?").join("・")}</div>
+              <div style={{fontSize:12,color:lastMeeting?"#64748b":"#cbd5e1",marginTop:2}}>💬 最終打合せ：{lastMeeting?`${lastMeeting}（${daysAgoLabel(lastMeeting)}）`:"記録なし"}</div>
             </div>
-            <span style={{color:"#94a3b8",fontSize:18}}>{open?"▲":"▼"}</span>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+              {onOpenClient && <button onClick={e=>{e.stopPropagation();onOpenClient(cl.id);}} style={{...S.btn("#0f2744"),padding:"6px 11px",fontSize:12}}>顧客ページ</button>}
+              <span style={{color:"#94a3b8",fontSize:18}}>{open?"▲":"▼"}</span>
+            </div>
           </div>
           {open && <div style={{borderTop:"1px solid #f1f5f9",padding:"14px 15px"}}>
             <Field label="依頼元名（会社名）" value={cl.name} onChange={v=>onUpdate({...cl,name:v})} placeholder="例：〇〇株式会社" />
@@ -664,7 +701,7 @@
         </div>
       );
     }
-    function ClientManager({ clients, onClose, onUpdate, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack }) {
+    function ClientManager({ clients, onClose, onUpdate, meetings, cases, onAddMeeting, onDeleteMeeting, onAddReminder, onSaveAndBack, onOpenClient }) {
       const [name, setName] = useState("");
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:90}}>
@@ -675,9 +712,155 @@
               <Field label="依頼元名（会社名）" value={name} onChange={setName} placeholder="例：〇〇株式会社" />
               <button onClick={()=>{ if(!name.trim()) return; onUpdate([...clients,{id:String(Date.now()),name:name.trim(),memo:"",contacts:[]}]); setName(""); }} style={{...S.btn("#0f2744"),width:"100%"}}>追加</button>
             </div>
-            {clients.map(cl=><ClientCard key={cl.id} cl={cl} onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))} onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))} meetings={meetings} cases={cases} onAddMeeting={onAddMeeting} onDeleteMeeting={onDeleteMeeting} onAddReminder={onAddReminder} />)}
+            {clients.map(cl=><ClientCard key={cl.id} cl={cl} onUpdate={updated=>onUpdate(clients.map(c=>c.id===updated.id?updated:c))} onDelete={()=>onUpdate(clients.filter(c=>c.id!==cl.id))} meetings={meetings} cases={cases} onAddMeeting={onAddMeeting} onDeleteMeeting={onDeleteMeeting} onAddReminder={onAddReminder} onOpenClient={onOpenClient} />)}
           </div>
           <SaveBar onSaveAndBack={()=>onSaveAndBack(onClose)} />
+        </div>
+      );
+    }
+
+    // ─── 顧客ページ ───────────────────────────────────────────────
+    function CaseRow({ c, related, clients, onClick }) {
+      const color = STATUS_LIST.find(s=>s.key===c.status)?.color||"#ccc";
+      const owner = related ? clientDisplayName(c, clients) : "";
+      return (
+        <div onClick={onClick} style={{background:"#fff",border:related?"1.5px dashed #94a3b8":"1px solid #e2e8f0",borderLeft:related?"1.5px dashed #94a3b8":`4px solid ${color}`,borderRadius:10,padding:"10px 12px",cursor:"pointer"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {c.starred && <span style={{color:"#f59e0b",fontSize:15,flexShrink:0}}>★</span>}
+            <span style={{flex:1,minWidth:0,fontWeight:700,fontSize:14,color:"#1e293b"}}>{c.title||"（件名未入力）"}</span>
+            <StatusBadge statusKey={c.status} small />
+          </div>
+          <div style={{display:"flex",gap:10,fontSize:11,color:"#94a3b8",marginTop:4,flexWrap:"wrap"}}>
+            {fmtWorkTime(c) && <span style={{color:"#7c3aed",fontWeight:600}}>🗓 {fmtWorkTime(c)}</span>}
+            {c.shipName && <span>🚢 {c.shipName}</span>}
+            {c.estimateAmount && <span>💴 {fmtYen(c.estimateAmount)}</span>}
+            {related && <span>🔗 打合せで関与{owner?`（依頼元：${owner}）`:""}</span>}
+          </div>
+        </div>
+      );
+    }
+    function ContactEditPanel({ ct, onUpdate, onDelete, onClose }) {
+      const [confirmDel, setConfirmDel] = useState(false);
+      return (
+        <div style={{background:"#f8fafc",border:"1.5px solid #0f2744",borderRadius:10,padding:"12px 12px 8px",marginTop:8}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#0f2744",marginBottom:10}}>担当者を編集</div>
+          <Field label="担当者名" value={ct.name} onChange={v=>onUpdate({...ct,name:v})} placeholder="例：鈴木 一郎" />
+          <Field label="電話番号" value={ct.tel||""} onChange={v=>onUpdate({...ct,tel:v})} placeholder="例：090-1234-5678" />
+          <Field label="メールアドレス" value={ct.email||""} onChange={v=>onUpdate({...ct,email:v})} placeholder="例：suzuki@example.co.jp" />
+          <Field label="メモ" value={ct.memo||""} onChange={v=>onUpdate({...ct,memo:v})} rows={2} placeholder="役職・備考など" />
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
+            <button onClick={onClose} style={{...S.btn("#e8edf3","#0f2744"),flex:1,fontSize:13,padding:"8px"}}>閉じる</button>
+            {!confirmDel
+              ? <button onClick={()=>setConfirmDel(true)} style={{background:"none",border:"none",color:"#dc2626",fontSize:12,cursor:"pointer",padding:"0 6px"}}>🗑️ 削除</button>
+              : <button onClick={onDelete} style={{...S.btn("#dc2626"),fontSize:12,padding:"8px 12px"}}>本当に削除する</button>}
+          </div>
+        </div>
+      );
+    }
+    function ClientPage({ cl, clients, cases, meetings, onUpdateClient, onAddMeeting, onDeleteMeeting, onAddReminder, onOpenCase, onBack, onSaveAndBack }) {
+      const [editingContactId, setEditingContactId] = useState(null);
+      const [showInfo, setShowInfo] = useState(false);
+      const [showClosed, setShowClosed] = useState(false);
+      const [showAllMeetings, setShowAllMeetings] = useState(false);
+      const id = String(cl.id);
+      const contacts = cl.contacts||[];
+      const isClosed = c => ["completed","lost"].includes(c.status);
+
+      const myCases = cases.filter(c=>String(c.clientId)===id);
+      const myIds = new Set(myCases.map(c=>String(c.id)));
+      const cm = clientMeetingsOf(cl, meetings, cases);
+      const relatedIds = [...new Set(cm.map(m=>String(m.caseId||"")).filter(x=>x && !myIds.has(x)))];
+      const relatedCases = relatedIds.map(i=>cases.find(c=>String(c.id)===i)).filter(Boolean);
+      const allCaseItems = [...myCases.map(c=>({c,related:false})), ...relatedCases.map(c=>({c,related:true}))];
+      const activeItems = allCaseItems.filter(x=>!isClosed(x.c));
+      const closedItems = allCaseItems.filter(x=>isClosed(x.c));
+      const activeCount = myCases.filter(c=>!isClosed(c)).length;
+      const starCount = myCases.filter(c=>c.starred && !isClosed(c)).length;
+      const last = lastMeetingDate(cm);
+      const sortedMeetings = [...cm].sort((a,b)=> (b.date||"").localeCompare(a.date||"") || String(b.id).localeCompare(String(a.id)));
+      const shownMeetings = showAllMeetings ? sortedMeetings : sortedMeetings.slice(0,10);
+      const editingContact = contacts.find(ct=>ct.id===editingContactId);
+
+      const card = {background:"#fff",borderRadius:12,padding:"14px 15px",marginTop:12,boxShadow:"0 1px 3px #0001"};
+      const h = {fontSize:13,fontWeight:800,color:"#0f2744",marginBottom:10,display:"flex",alignItems:"center",gap:6};
+
+      function updateContact(updated) { onUpdateClient({...cl, contacts: contacts.map(c=>c.id===updated.id?updated:c)}); }
+      function addContact() { const nc = emptyContact(); onUpdateClient({...cl, contacts:[...contacts, nc]}); setEditingContactId(nc.id); }
+      function deleteContact(ctid) { onUpdateClient({...cl, contacts: contacts.filter(c=>c.id!==ctid)}); setEditingContactId(null); }
+
+      return (
+        <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:100}}>
+          <TopBar title={cl.name||"（名称未入力）"} onBack={onBack} />
+          <div style={{display:"flex",background:"#0f2744",padding:"0 16px 12px"}}>
+            <div style={{flex:2,textAlign:"center",color:"#fff"}}>
+              <div style={{fontSize:15,fontWeight:800,marginTop:4}}>{daysAgoLabel(last)}</div>
+              <div style={{fontSize:11,opacity:0.6}}>最終打合せ{last?`（${last.slice(5).replace("-","/")}）`:""}</div>
+            </div>
+            <div style={{flex:1,textAlign:"center",color:"#fff"}}>
+              <div style={{fontSize:20,fontWeight:800}}>{activeCount}</div>
+              <div style={{fontSize:11,opacity:0.6}}>進行中案件</div>
+            </div>
+            <div style={{flex:1,textAlign:"center",color:"#fff"}}>
+              <div style={{fontSize:20,fontWeight:800}}>⭐{starCount}</div>
+              <div style={{fontSize:11,opacity:0.6}}>スター</div>
+            </div>
+          </div>
+          <div style={{padding:"0 16px"}}>
+            {/* 担当者 */}
+            <div style={card}>
+              <div style={h}>👥 担当者（{contacts.length}名）</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {contacts.map(ct=>(
+                  <div key={ct.id} onClick={()=>setEditingContactId(ct.id===editingContactId?null:ct.id)} style={{background:ct.id===editingContactId?"#e8edf3":"#f8fafc",border:ct.id===editingContactId?"1.5px solid #0f2744":"1px solid #e2e8f0",borderRadius:10,padding:"9px 10px",cursor:"pointer",minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13,color:"#1e293b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ct.name||"（名前未入力）"}</div>
+                    {ct.tel && <a href={`tel:${ct.tel}`} onClick={e=>e.stopPropagation()} style={{display:"block",fontSize:11,color:"#1d4ed8",marginTop:3,textDecoration:"none",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📞 {ct.tel}</a>}
+                    {ct.email && <div style={{fontSize:11,color:"#64748b",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>✉ {ct.email}</div>}
+                    {ct.memo && <div style={{fontSize:10,color:"#94a3b8",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ct.memo}</div>}
+                  </div>
+                ))}
+                <button onClick={addContact} style={{background:"#fff",border:"1.5px dashed #cbd5e1",borderRadius:10,padding:"9px 10px",cursor:"pointer",color:"#64748b",fontSize:13,fontWeight:600,minHeight:50}}>＋ 担当者を追加</button>
+              </div>
+              {editingContact && <ContactEditPanel key={editingContact.id} ct={editingContact} onUpdate={updateContact} onDelete={()=>deleteContact(editingContact.id)} onClose={()=>setEditingContactId(null)} />}
+            </div>
+
+            {/* 案件 */}
+            <div style={card}>
+              <div style={h}>📋 案件（{activeItems.length}件）</div>
+              {activeItems.length===0 && <div style={{fontSize:13,color:"#94a3b8",padding:"6px 0"}}>進行中の案件はありません</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {activeItems.map(({c,related})=><CaseRow key={c.id} c={c} related={related} clients={clients} onClick={()=>onOpenCase(c.id)} />)}
+              </div>
+              {closedItems.length>0 && <div style={{marginTop:8}}>
+                <button onClick={()=>setShowClosed(s=>!s)} style={{background:"none",border:"none",color:"#64748b",fontSize:12,cursor:"pointer",padding:"4px 2px",fontWeight:600}}>{showClosed?"▼":"▶"} 完了・失注（{closedItems.length}件）</button>
+                {showClosed && <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6}}>
+                  {closedItems.map(({c,related})=><CaseRow key={c.id} c={c} related={related} clients={clients} onClick={()=>onOpenCase(c.id)} />)}
+                </div>}
+              </div>}
+              {allCaseItems.some(x=>x.related) && <div style={{fontSize:10,color:"#94a3b8",marginTop:8}}>点線の枠は、他社の案件ですがこの顧客と打合せをした案件です</div>}
+            </div>
+
+            {/* 打合せ */}
+            <div style={card}>
+              <div style={h}>💬 打合せ記録（{cm.length}件）</div>
+              <MeetingForm initialClientId={cl.id} lockClient clients={[cl]} cases={allCaseItems.map(x=>x.c)} onAdd={onAddMeeting} onAddReminder={onAddReminder} />
+              {cm.length===0 && <div style={{fontSize:13,color:"#94a3b8",padding:"6px 0"}}>打合せ記録はまだありません</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {shownMeetings.map(m=><MeetingRow key={m.id} m={m} clients={[cl]} cases={cases} showCase onDelete={()=>onDeleteMeeting(m.id)} />)}
+              </div>
+              {sortedMeetings.length>10 && <button onClick={()=>setShowAllMeetings(s=>!s)} style={{...S.btn("#e8edf3","#0f2744"),width:"100%",fontSize:12,marginTop:12,padding:"8px"}}>{showAllMeetings?"最新10件だけ表示":`すべて表示（残り${sortedMeetings.length-10}件）`}</button>}
+            </div>
+
+            {/* 会社情報 */}
+            <div style={card}>
+              <button onClick={()=>setShowInfo(s=>!s)} style={{background:"none",border:"none",cursor:"pointer",padding:0,width:"100%",textAlign:"left",...h,marginBottom:showInfo?10:0}}>🏢 会社情報を編集 <span style={{marginLeft:"auto",color:"#94a3b8"}}>{showInfo?"▲":"▼"}</span></button>
+              {showInfo && <>
+                <Field label="依頼元名（会社名）" value={cl.name} onChange={v=>onUpdateClient({...cl,name:v})} placeholder="例：〇〇株式会社" />
+                <Field label="会社メモ" value={cl.memo||""} onChange={v=>onUpdateClient({...cl,memo:v})} rows={2} placeholder="所在地・業種など" />
+              </>}
+              {!showInfo && cl.memo && <div style={{fontSize:12,color:"#64748b",marginTop:8,whiteSpace:"pre-wrap"}}>{cl.memo}</div>}
+            </div>
+          </div>
+          <SaveBar onSaveAndBack={()=>onSaveAndBack(onBack)} />
         </div>
       );
     }
@@ -730,6 +913,7 @@
       const [saveState, setSaveState] = useState("idle");
       const [view,       setView]       = useState("list");
       const [selectedId, setSelectedId] = useState(null);
+      const [selectedClientId, setSelectedClientId] = useState(null);
       const [filterStatus, setFilterStatus] = useState("all");
       const [showLost,     setShowLost]     = useState(false);
       const [hideCompleted, setHideCompleted] = useState(false);
@@ -743,6 +927,7 @@
       const lastKnownUpdatedAt = useRef(null); // 自分が最後に取得/保存した時点のサーバー側updated_at
       const isEditing = useRef(false);         // 直近の編集操作からの猶予中かどうか
       const inFlightSave = useRef(null);       // 保存処理が同時に複数走るのを防ぐ（自動保存とボタン保存の衝突対策）
+      const navStack = useRef([]);             // 画面の履歴（案件→顧客→別の案件…と辿っても、戻るで順に戻れるように）
 
       // データ読み込み直後の1回だけ、自動保存の発火をスキップするためのフラグ。
       // 読み込んだデータをそのまま無駄に保存し直してしまうのを防ぐ。
@@ -867,12 +1052,28 @@
       const activeCount = cases.filter(c=>!["completed","lost"].includes(c.status)).length;
       function updateCase(u) { setCases(prev=>prev.map(c=>c.id===u.id?u:c)); }
       function toggleStar(id) { setCases(prev=>prev.map(c=>c.id===id?{...c,starred:!c.starred}:c)); }
+      // ─ 画面遷移（履歴スタック方式）─
+      function openCase(id) { navStack.current.push({view, selectedId, selectedClientId}); setSelectedId(id); setView("detail"); }
+      function openClient(id) { navStack.current.push({view, selectedId, selectedClientId}); setSelectedClientId(id); setView("client"); }
+      function goList() { navStack.current = []; setView("list"); }
+      function goView(v) { navStack.current = []; setView(v); }
+      function goBack(excludeCaseId) {
+        while (navStack.current.length) {
+          const e = navStack.current.pop();
+          if (e.view==="detail" && (!cases.some(c=>c.id===e.selectedId) || (excludeCaseId && e.selectedId===excludeCaseId))) continue;
+          if (e.view==="client" && !clients.some(cl=>String(cl.id)===String(e.selectedClientId))) continue;
+          setSelectedId(e.selectedId); setSelectedClientId(e.selectedClientId); setView(e.view);
+          return;
+        }
+        setView("list");
+      }
       function deleteCase(id) {
         setCases(prev=>prev.filter(c=>c.id!==id));
         setMeetings(prev=>prev.filter(m=>String(m.caseId)!==String(id)));
-        setView("list");
+        goBack(id);
       }
-      function addCase() { const nc=emptyCase(); setCases(prev=>[nc,...prev]); setSelectedId(nc.id); setView("detail"); }
+      function addCase() { const nc=emptyCase(); setCases(prev=>[nc,...prev]); navStack.current=[]; setSelectedId(nc.id); setView("detail"); }
+      function updateClient(u) { setClients(prev=>prev.map(c=>c.id===u.id?u:c)); }
       function addMeeting(data) { setMeetings(prev=>[...prev, {id:String(Date.now()), ...data}]); }
       function deleteMeeting(id) { setMeetings(prev=>prev.filter(m=>m.id!==id)); }
       function addReminder(data) { setReminders(prev=>[...prev, {id:String(Date.now()), done:false, ...data}]); }
@@ -888,16 +1089,18 @@
         onForceSave={async ()=>{ setConflict(false); await doSave(true); }}
       />;
 
-      if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} reminders={reminders} onImport={(c,cl,mt,rd)=>{setCases(c);setClients(cl);setMeetings(mt||[]);setReminders(rd||[]);}} onClose={()=>setView("list")} /></>;
-      if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={()=>setView("list")} onUpdate={setClients} meetings={meetings} cases={cases} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} /></>;
-      if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>setView("list")} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} /></>;
+      const selectedClient = clients.find(cl=>String(cl.id)===String(selectedClientId));
+      if (view==="dataio")  return <>{conflictModal}<DataIO cases={cases} clients={clients} meetings={meetings} reminders={reminders} onImport={(c,cl,mt,rd)=>{setCases(c);setClients(cl);setMeetings(mt||[]);setReminders(rd||[]);}} onClose={goList} /></>;
+      if (view==="clients") return <>{conflictModal}<ClientManager clients={clients} onClose={goList} onUpdate={setClients} meetings={meetings} cases={cases} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} onOpenClient={openClient} /></>;
+      if (view==="client"&&selectedClient) return <>{conflictModal}<ClientPage cl={selectedClient} clients={clients} cases={cases} meetings={meetings} onUpdateClient={updateClient} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onOpenCase={openCase} onBack={()=>goBack()} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} /></>;
+      if (view==="detail"&&selected) return <>{conflictModal}<CaseDetail c={selected} onChange={updateCase} onBack={()=>goBack()} onDelete={deleteCase} clients={clients} meetings={meetings} onAddMeeting={addMeeting} onDeleteMeeting={deleteMeeting} onAddReminder={addReminder} onSaveAndBack={afterSave=>saveNowThenBack(afterSave)} onOpenClient={openClient} /></>;
 
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9"}}>
           <TopBar title="🚢 案件管理" right={
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <button onClick={()=>setView("dataio")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>引き継ぎ</button>
-              <button onClick={()=>setView("clients")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>顧客管理</button>
+              <button onClick={()=>goView("dataio")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>引き継ぎ</button>
+              <button onClick={()=>goView("clients")} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"1px solid rgba(255,255,255,0.3)",borderRadius:8,padding:"5px 11px",fontSize:12,cursor:"pointer"}}>顧客管理</button>
               <button onClick={()=>{localStorage.removeItem("anken_unlocked");setUnlocked(false);}} style={{background:"rgba(255,255,255,0.1)",color:"rgba(255,255,255,0.7)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"5px 11px",fontSize:11,cursor:"pointer"}}>ロック</button>
             </div>
           } />
@@ -911,14 +1114,14 @@
               </div>
             ))}
           </div>
-          <StarredSection cases={cases} clients={clients} onClick={id=>{setSelectedId(id);setView("detail");}} />
+          <StarredSection cases={cases} clients={clients} onClick={openCase} />
           <ReminderBanner reminders={reminders} cases={cases} onDone={doneReminder} onDelete={deleteReminder} onEdit={setEditingReminder} onUndone={undoneReminder} />
           {showReminderForm && <ReminderAddForm cases={cases} onSave={addReminder} onClose={()=>setShowReminderForm(false)} />}
           {editingReminder && <ReminderAddForm key={editingReminder.id} cases={cases} initial={editingReminder} onSave={data=>updateReminder(editingReminder.id, data)} onClose={()=>setEditingReminder(null)} />}
-          <UpcomingWorkSection cases={cases} clients={clients} onClick={id=>{setSelectedId(id);setView("detail");}} />
+          <UpcomingWorkSection cases={cases} clients={clients} onClick={openCase} />
           {alertCases.length>0 && <div style={{background:"#fffbeb",borderLeft:"4px solid #f59e0b",margin:"12px 16px 0",borderRadius:8,padding:"10px 13px"}}>
             <div style={{fontWeight:700,color:"#92400e",fontSize:13}}>⚠️ 下見積もり未入力 {alertCases.length}件</div>
-            {alertCases.map(c=><div key={c.id} onClick={()=>{setSelectedId(c.id);setView("detail");}} style={{fontSize:12,color:"#b45309",marginTop:3,cursor:"pointer"}}>→ {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>)}
+            {alertCases.map(c=><div key={c.id} onClick={()=>openCase(c.id)} style={{fontSize:12,color:"#b45309",marginTop:3,cursor:"pointer"}}>→ {clientDisplayName(c,clients)||"（依頼元未入力）"}｜{c.title||"件名未入力"}</div>)}
           </div>}
           <div style={{padding:"12px 16px 0"}}><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 依頼元・件名で検索…" style={S.input} /></div>
           <div style={{padding:"8px 16px 0",display:"flex",gap:6}}>
@@ -947,7 +1150,7 @@
           </div>
           <div style={{padding:"12px 16px"}}>
             {sorted.length===0 && <div style={{textAlign:"center",color:"#94a3b8",padding:"50px 0"}}><div style={{fontSize:36,marginBottom:8}}>📋</div><div>{search||filterStatus!=="all"||filterYear||filterMonth?"該当する案件がありません":"案件を追加してください"}</div></div>}
-            {sorted.map(c=><CaseCard key={c.id} c={c} onClick={()=>{setSelectedId(c.id);setView("detail");}} onToggleStar={toggleStar} clients={clients} />)}
+            {sorted.map(c=><CaseCard key={c.id} c={c} onClick={()=>openCase(c.id)} onToggleStar={toggleStar} clients={clients} onOpenClient={openClient} />)}
           </div>
           <button onClick={addCase} style={{position:"fixed",bottom:24,right:20,width:58,height:58,borderRadius:"50%",background:"#0f2744",color:"#fff",fontSize:30,border:"none",boxShadow:"0 4px 16px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>＋</button>
           <button onClick={()=>setShowReminderForm(true)} title="やることを追加" style={{position:"fixed",bottom:24,right:90,width:48,height:48,borderRadius:"50%",background:"#f59e0b",color:"#fff",fontSize:22,border:"none",boxShadow:"0 4px 12px #0003",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>📝</button>
