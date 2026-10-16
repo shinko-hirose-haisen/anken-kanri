@@ -167,7 +167,7 @@
     }
     // 画面下部に固定表示する「保存して戻る」ボタン。押すと即座に保存し、
     // 成功時のみ前の画面へ戻る。競合・失敗時はその場に留まりエラーを表示する。
-    function SaveBar({ onSaveAndBack }) {
+    function SaveBar({ onSaveAndBack, maxWidth }) {
       const [busy, setBusy] = useState(false);
       const [failed, setFailed] = useState(false);
       async function handleClick() {
@@ -178,8 +178,10 @@
       }
       return (
         <div style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:"1px solid #e2e8f0",padding:"10px 16px",paddingBottom:"calc(10px + env(safe-area-inset-bottom))",boxShadow:"0 -2px 10px #0001",zIndex:60}}>
-          {failed && <div style={{fontSize:11,color:"#dc2626",textAlign:"center",marginBottom:6,fontWeight:600}}>保存できませんでした。もう一度お試しください</div>}
-          <button onClick={handleClick} disabled={busy} style={{...S.btn("#0f2744"),width:"100%",fontSize:15,padding:"12px",opacity:busy?0.7:1}}>{busy?"保存中…":"💾 保存して戻る"}</button>
+          <div style={maxWidth?{maxWidth,margin:"0 auto"}:undefined}>
+            {failed && <div style={{fontSize:11,color:"#dc2626",textAlign:"center",marginBottom:6,fontWeight:600}}>保存できませんでした。もう一度お試しください</div>}
+            <button onClick={handleClick} disabled={busy} style={{...S.btn("#0f2744"),width:"100%",fontSize:15,padding:"12px",opacity:busy?0.7:1}}>{busy?"保存中…":"💾 保存して戻る"}</button>
+          </div>
         </div>
       );
     }
@@ -720,6 +722,7 @@
     }
 
     // ─── 顧客ページ ───────────────────────────────────────────────
+    const CLIENT_PAGE_MAX_W = 720; // PCの広い画面で間延びしないよう、顧客ページだけ横幅を絞る
     function CaseRow({ c, related, clients, onClick }) {
       const color = STATUS_LIST.find(s=>s.key===c.status)?.color||"#ccc";
       const owner = related ? clientDisplayName(c, clients) : "";
@@ -791,7 +794,8 @@
       return (
         <div style={{minHeight:"100vh",background:"#f1f5f9",paddingBottom:100}}>
           <TopBar title={cl.name||"（名称未入力）"} onBack={onBack} />
-          <div style={{display:"flex",background:"#0f2744",padding:"0 16px 12px"}}>
+          <div style={{background:"#0f2744",padding:"0 16px 12px"}}>
+           <div style={{display:"flex",maxWidth:CLIENT_PAGE_MAX_W,margin:"0 auto"}}>
             <div style={{flex:2,textAlign:"center",color:"#fff"}}>
               <div style={{fontSize:15,fontWeight:800,marginTop:4}}>{daysAgoLabel(last)}</div>
               <div style={{fontSize:11,opacity:0.6}}>最終打合せ{last?`（${last.slice(5).replace("-","/")}）`:""}</div>
@@ -804,8 +808,9 @@
               <div style={{fontSize:20,fontWeight:800}}>⭐{starCount}</div>
               <div style={{fontSize:11,opacity:0.6}}>スター</div>
             </div>
+           </div>
           </div>
-          <div style={{padding:"0 16px"}}>
+          <div style={{padding:"0 16px",maxWidth:CLIENT_PAGE_MAX_W+32,margin:"0 auto"}}>
             {/* 担当者 */}
             <div style={card}>
               <div style={h}>👥 担当者（{contacts.length}名）</div>
@@ -860,7 +865,7 @@
               {!showInfo && cl.memo && <div style={{fontSize:12,color:"#64748b",marginTop:8,whiteSpace:"pre-wrap"}}>{cl.memo}</div>}
             </div>
           </div>
-          <SaveBar onSaveAndBack={()=>onSaveAndBack(onBack)} />
+          <SaveBar maxWidth={CLIENT_PAGE_MAX_W} onSaveAndBack={()=>onSaveAndBack(onBack)} />
         </div>
       );
     }
